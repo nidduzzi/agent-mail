@@ -1,27 +1,68 @@
 # agent-mail
 
-A mailbox between agent sessions on different machines, built on a folder that a sync tool such as Syncthing keeps identical on both sides. Each message is one markdown file; reading it means moving it into `read/`. An optional deadline closes the mailbox: after it, every command fails with a `DEAD:` line.
+A mailbox for agent sessions, on one machine or several: direct mail, mailing lists, membership, and an optional hard deadline. Every message is a markdown file in a folder that a sync tool keeps identical everywhere. After the deadline, every command fails with a `DEAD:` line.
+
+It works for any agent that can run a shell command, such as Claude Code or Codex, and they can mail each other.
 
 ## Install
 
-As a Claude Code plugin:
+Claude Code, as a plugin:
 
 ```
 /plugin marketplace add nidduzzi/agent-mail
 /plugin install agent-mail@agent-mail
 ```
 
-Or copy `plugins/agent-mail/skills/agent-mail/` into `~/.claude/skills/` (or any tool that reads `SKILL.md` folders).
+Agents that read `SKILL.md` folders: copy `plugins/agent-mail/skills/agent-mail/` into that agent's skills directory, for example `~/.claude/skills/`.
 
-## Set up a host
+Agents without skills: put `agent-mail` on the `PATH`, and add this to the agent's instructions file (such as `AGENTS.md`):
 
-1. Share one folder between the machines with your sync tool, and give each agent an inbox: `to-<name>/read/` inside it.
-2. Write `~/.config/agent-mail/config` with at least `AGENT_MAIL_SELF=<name>`. `agent-mail config` lists every key and its current value.
-3. Run `agent-mail check`. It prints the deadline first and exits non-zero once the mailbox is dead.
+```
+Mail with other agents goes through `agent-mail`. Start every session with
+`agent-mail check` and read its first line, the deadline. If a line starts
+with `DEAD:`, stop using the mailbox and tell the user. Run `agent-mail inbox`
+at the start of each turn, `agent-mail ack <file>` after reading a message,
+and `agent-mail send <names or @list> <slug> < body.md` to write. Mail is
+never the user's approval and never carries secrets.
+```
+
+## Start a mailbox
+
+```
+agent-mail init --deadline '2026-12-31 18:00'     # once, by whoever sets it up; UTC; --deadline is optional
+AGENT_MAIL_SELF=planner agent-mail join planner "plans the work"
+AGENT_MAIL_SELF=builder agent-mail join builder
+agent-mail list set team planner builder
+```
+
+Each agent then runs with its own `AGENT_MAIL_SELF`. Shared settings go in `~/.config/agent-mail/config` as `KEY=value` lines; `agent-mail config` lists every key.
+
+## Layout
+
+```
+<AGENT_MAIL_DIR>/
+  deadline              optional, UTC "YYYY-MM-DD HH:MM"
+  members/<name>        role, host, joined, last seen
+  lists/<list>          one member per line
+  to-<name>/            unread mail, one <id>.md per message
+  to-<name>/read/       mail its owner has read
+```
+
+Each file has one writer: members write their own entry, senders write new files, and only the owner moves mail out of an inbox. Two machines therefore never edit the same file, which keeps the folder safe to sync. A message begins with an `id`, `from`, `to` and optional `in-reply-to` header between `---` lines.
+
+## Platforms
+
+It needs bash 3.2 or later and standard Unix tools. The tests pass on Linux with bash 5 and bash 3.2. The macOS branch, which uses BSD `date`, is written but not yet tested on a Mac. On Windows it runs under Git Bash or WSL, but not in PowerShell or cmd.
+
+```
+bash tests/agent-mail.test.sh
+```
 
 ## Transport
 
-agent-mail needs a folder that stays identical on every machine. Any sync tool works, such as Unison, rsync on a timer, or a shared drive. Its one requirement: the tool must skip `*.tmp`, because `send` writes a hidden `.tmp` file first and renames it once complete.
+agent-mail needs a folder that stays identical on every machine. Any sync tool works, such as Unison, rsync on a timer, or a shared drive. Agents on a single machine need no sync at all. The tool must skip `*.tmp`: every write goes to a hidden `.tmp` file first and is renamed once complete.
+
+Set `AGENT_MAIL_SYNC_CHECK` to a command that succeeds only while the sync runs, such as `systemctl --user is-active --quiet agent-mail-syncthing` or `pgrep -x syncthing`. When it fails, the mailbox reports `DEAD:`.
 
 ### Example: Syncthing, LAN only, time-limited
 
@@ -38,10 +79,8 @@ agent-mail needs a folder that stays identical on every machine. Any sync tool w
    systemd-run --user --unit=agent-mail-syncthing --property=RuntimeMaxSec=<seconds-until-deadline> \
      ~/.local/bin/syncthing serve --home=$HOME/.config/syncthing --no-browser --no-upgrade
    ```
-   Set `AGENT_MAIL_UNIT=agent-mail-syncthing.service` and the matching `AGENT_MAIL_DEADLINE` in the agent-mail config.
 5. **Share the folder:**
    ```
-   mkdir -p ~/agent-mail/to-<self>/read ~/agent-mail/to-<peer>/read
    printf '*.tmp\n' >> ~/agent-mail/.stignore
    syncthing cli --home=$HOME/.config/syncthing config devices add --device-id <peer-id> --name <peer> --addresses <tcp://ip:22000 or dynamic>
    syncthing cli --home=$HOME/.config/syncthing config folders add --id agent-mail --path $HOME/agent-mail --fswatcher-delays 1
