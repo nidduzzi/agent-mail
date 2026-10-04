@@ -27,7 +27,10 @@ const usage = `usage: agent-mail <command>
   send [--reply-to <id>] <name,name,@list> <slug> < body.md
   inbox                                    unread mail, and own mail not yet read
   ack <file>                               mark a message read
-  watch                                    print NEW MAIL lines until the mailbox dies`
+  watch                                    print NEW MAIL lines until the mailbox dies
+  doctor                                   what is missing, and how to fix it (changes nothing)
+  sync id | status                         this device's Syncthing ID; how the mailbox is shared
+  sync share <device-id> [--address tcp://ip:22000|dynamic] [--name n] [--yes]`
 
 type deadError struct{ reason string }
 
@@ -113,6 +116,10 @@ func (a agent) dispatch(command string, args []string) error {
 		return a.asMember(a.quiet, func() error { return a.acknowledge(args) })
 	case "watch":
 		return a.asMember(a.quiet, a.watch)
+	case "doctor":
+		return a.doctor()
+	case "sync":
+		return a.syncCommand(args)
 	default:
 		return errors.New(usage)
 	}

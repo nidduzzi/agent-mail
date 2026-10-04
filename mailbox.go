@@ -5,7 +5,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -169,32 +168,17 @@ func (a agent) checkLive(report *output) error {
 }
 
 func (a agent) checkSync() error {
-	if a.cfg.syncCheck == "" || runSucceeds(a.cfg.syncCheck) {
+	switch a.cfg.syncCheck {
+	case "":
 		return nil
-	}
-	return deadError{"the sync check failed: " + a.cfg.syncCheck}
-}
-
-func runSucceeds(command string) bool {
-	shell, argv := "/bin/sh", []string{"sh", "-c", command}
-	if runtime.GOOS == "windows" {
-		shell = os.Getenv("ComSpec")
-		if shell == "" {
-			shell = `C:\Windows\System32\cmd.exe`
+	case "syncthing":
+		return a.syncthingServesMailbox()
+	default:
+		if shellSucceeds(a.cfg.syncCheck) {
+			return nil
 		}
-		argv = []string{"cmd", "/C", command}
+		return deadError{"the sync check failed: " + a.cfg.syncCheck}
 	}
-	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
-	if err != nil {
-		return false
-	}
-	defer devNull.Close()
-	process, err := os.StartProcess(shell, argv, &os.ProcAttr{Files: []*os.File{devNull, devNull, devNull}})
-	if err != nil {
-		return false
-	}
-	state, err := process.Wait()
-	return err == nil && state.Success()
 }
 
 func (a agent) requireIdentity() error {

@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+state="${FAKE_SYNCTHING_STATE:?FAKE_SYNCTHING_STATE must name the state directory of the fake}"
+args=()
+for arg in "$@"; do
+  case "$arg" in
+    --home=*) ;;
+    *) args+=("$arg") ;;
+  esac
+done
+set -- "${args[@]}"
+
+running() {
+  [ ! -e "$state/stopped" ]
+}
+
+value_after() {
+  local flag="$1"
+  shift
+  while [ "$#" -gt 1 ]; do
+    if [ "$1" = "$flag" ]; then
+      echo "$2"
+      return
+    fi
+    shift
+  done
+}
+
+case "$*" in
+  "device-id")
+    cat "$state/id"
+    ;;
+  "cli config folders list")
+    running
+    [ -e "$state/folder-path" ] && echo agent-mail
+    true
+    ;;
+  "cli config folders agent-mail path get")
+    running
+    cat "$state/folder-path"
+    ;;
+  "cli config folders agent-mail devices list")
+    running
+    [ -e "$state/folder-path" ]
+    cat "$state/id"
+    cat "$state/shared" 2>/dev/null || true
+    ;;
+  "cli config devices list")
+    running
+    cat "$state/id"
+    cat "$state/devices" 2>/dev/null || true
+    ;;
+  "cli config devices add "*)
+    running
+    value_after --device-id "$@" >> "$state/devices"
+    ;;
+  "cli config folders add "*)
+    running
+    value_after --path "$@" > "$state/folder-path"
+    ;;
+  "cli config folders agent-mail devices add "*)
+    running
+    value_after --device-id "$@" >> "$state/shared"
+    ;;
+  "cli config options "*" get")
+    running
+    cat "$state/option-$4" 2>/dev/null || echo false
+    ;;
+  *)
+    echo "fake-syncthing: unsupported: $*" >&2
+    exit 64
+    ;;
+esac

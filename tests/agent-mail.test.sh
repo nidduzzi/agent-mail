@@ -203,6 +203,70 @@ test_leaving_ends_a_running_watch() {
   expect "watch stops once its member has left" 1 "no longer a member" watch_result
 }
 
+readonly fake_syncthing="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fake-syncthing"
+readonly this_device="AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH"
+readonly peer_device="ZZZZZZZ-YYYYYYY-XXXXXXX-WWWWWWW-VVVVVVV-UUUUUUU-TTTTTTT-SSSSSSS"
+
+with_syncthing() {
+  AGENT_MAIL_SYNCTHING="$fake_syncthing" FAKE_SYNCTHING_STATE="$syncthing_state" "$@"
+}
+
+fresh_syncthing() {
+  syncthing_state="$(mktemp -d)"
+  printf '%s\n' "$this_device" > "$syncthing_state/id"
+}
+
+on_windows() {
+  case "$(uname -s)" in
+    MINGW* | MSYS* | CYGWIN*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+test_doctor_explains_what_is_missing() {
+  mailbox="$(mktemp -d)/mail"
+  expect "doctor reports a missing mailbox and exits 1" 1 "problem  no mailbox at" env AGENT_MAIL_CONFIG=/dev/null AGENT_MAIL_DIR="$mailbox" AGENT_MAIL_SYNCTHING=/nonexistent "$agent_mail" doctor
+  fresh_mailbox
+  expect "doctor accepts a local mailbox with warnings only" 0 "warning  no sync check and no Syncthing" env AGENT_MAIL_CONFIG=/dev/null AGENT_MAIL_DIR="$mailbox" AGENT_MAIL_SELF=alpha AGENT_MAIL_SYNCTHING=/nonexistent "$agent_mail" doctor
+  expect "doctor says how to install Syncthing" 0 "install Syncthing" env AGENT_MAIL_CONFIG=/dev/null AGENT_MAIL_DIR="$mailbox" AGENT_MAIL_SELF=alpha AGENT_MAIL_SYNCTHING=/nonexistent "$agent_mail" doctor
+  expect "doctor flags an agent without identity" 1 "this agent has no identity" env AGENT_MAIL_CONFIG=/dev/null AGENT_MAIL_DIR="$mailbox" AGENT_MAIL_SYNCTHING=/nonexistent "$agent_mail" doctor
+  expect "doctor changes nothing" 0 "nothing was changed" env AGENT_MAIL_CONFIG=/dev/null AGENT_MAIL_DIR="$mailbox" AGENT_MAIL_SELF=alpha AGENT_MAIL_SYNCTHING=/nonexistent "$agent_mail" doctor
+}
+
+test_syncthing_sharing() {
+  if on_windows; then
+    echo "skip syncthing tests: Windows cannot launch the bash fake as a program"
+    return
+  fi
+  fresh_mailbox
+  fresh_syncthing
+  expect "sync id prints this device's ID" 0 "$this_device" with_syncthing as alpha sync id
+  expect "doctor flags an unshared mailbox" 1 "does not share" with_syncthing as alpha doctor
+  expect "share without --yes only prints the plan" 0 "will share folder 'agent-mail' with $peer_device" with_syncthing as alpha sync share "$peer_device" --address tcp://192.0.2.7:22000
+  [ ! -e "$syncthing_state/shared" ] && [ ! -e "$mailbox/.stignore" ] && passed=$(( passed + 1 )) && echo "ok   a plan without --yes changes nothing" \
+    || { failed=$(( failed + 1 )); echo "FAIL a plan without --yes changes nothing"; }
+  expect "share --yes applies every step" 0 "done: add '\*.tmp'" with_syncthing as alpha sync share "$peer_device" --address tcp://192.0.2.7:22000 --yes
+  expect "share is idempotent" 0 "nothing to do" with_syncthing as alpha sync share "$peer_device" --yes
+  expect "status shows the peer" 0 "shared with: $peer_device" with_syncthing as alpha sync status
+  expect "the built-in sync check passes once shared" 0 "time left\|DEADLINE: none" env AGENT_MAIL_SYNC_CHECK=syncthing AGENT_MAIL_SYNCTHING="$fake_syncthing" FAKE_SYNCTHING_STATE="$syncthing_state" AGENT_MAIL_CONFIG=/dev/null AGENT_MAIL_DIR="$mailbox" AGENT_MAIL_SELF=alpha "$agent_mail" check
+  touch "$syncthing_state/stopped"
+  expect "the built-in sync check fails when Syncthing stops" 2 "DEAD: the sync check failed: Syncthing is not running" env AGENT_MAIL_SYNC_CHECK=syncthing AGENT_MAIL_SYNCTHING="$fake_syncthing" FAKE_SYNCTHING_STATE="$syncthing_state" AGENT_MAIL_CONFIG=/dev/null AGENT_MAIL_DIR="$mailbox" AGENT_MAIL_SELF=alpha "$agent_mail" check
+  expect "doctor gives the start command when Syncthing stops" 1 "start it" with_syncthing as alpha doctor
+  rm "$syncthing_state/stopped"
+  expect "share refuses a malformed device ID" 1 "a device id is 8 groups" with_syncthing as alpha sync share NOT-AN-ID
+  expect "share refuses this device's own ID" 1 "this device's own ID" with_syncthing as alpha sync share "$this_device"
+  expect "share refuses a malformed address" 1 "--address is" with_syncthing as alpha sync share "$peer_device" --address "192.0.2.7; rm -rf /"
+  echo true > "$syncthing_state/option-relays-enabled"
+  expect "doctor warns when traffic can leave the LAN" 0 "may reach beyond the LAN: relays" with_syncthing as alpha doctor
+
+  fresh_mailbox
+  fresh_syncthing
+  printf 'keep-me' > "$mailbox/.stignore"
+  with_syncthing as alpha sync share "$peer_device" --yes >/dev/null
+  expect "share keeps an existing last .stignore line intact" 0 "^keep-me$" cat "$mailbox/.stignore"
+  expect "share puts *.tmp on its own line" 0 "^\*\.tmp$" cat "$mailbox/.stignore"
+}
+
 test_leaving() {
   fresh_mailbox
   expect "leave drops the membership" 0 "left" as gamma leave

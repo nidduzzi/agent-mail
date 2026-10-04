@@ -16,6 +16,8 @@ type config struct {
 	dir               string
 	syncCheck         string
 	syncCheckInterval time.Duration
+	syncthingProgram  string
+	syncthingHome     string
 	pollInterval      time.Duration
 	staleAfter        time.Duration
 }
@@ -27,6 +29,8 @@ var configKeys = map[string]bool{
 	"AGENT_MAIL_SYNC_CHECK_SECONDS": true,
 	"AGENT_MAIL_POLL_SECONDS":       true,
 	"AGENT_MAIL_STALE_MINUTES":      true,
+	"AGENT_MAIL_SYNCTHING":          true,
+	"AGENT_MAIL_SYNCTHING_HOME":     true,
 }
 
 func loadConfig(getenv func(string) string) (config, error) {
@@ -84,6 +88,8 @@ func loadConfig(getenv func(string) string) (config, error) {
 		dir:               dir,
 		syncCheck:         value("AGENT_MAIL_SYNC_CHECK", ""),
 		syncCheckInterval: syncEvery,
+		syncthingProgram:  expandHome(value("AGENT_MAIL_SYNCTHING", ""), home),
+		syncthingHome:     expandHome(value("AGENT_MAIL_SYNCTHING_HOME", ""), home),
 		pollInterval:      poll,
 		staleAfter:        staleAfter,
 	}, nil
@@ -125,10 +131,12 @@ func (c config) print(o *output) {
 		{"AGENT_MAIL_CONFIG", c.file},
 		{"AGENT_MAIL_SELF", orExplain(c.self, "unset: the name of this agent in the mailbox")},
 		{"AGENT_MAIL_DIR", c.dir},
-		{"AGENT_MAIL_SYNC_CHECK", orExplain(c.syncCheck, "none: command that must succeed while the sync runs")},
+		{"AGENT_MAIL_SYNC_CHECK", orExplain(c.syncCheck, "none: 'syncthing', or a command that must succeed while the sync runs")},
 		{"AGENT_MAIL_SYNC_CHECK_SECONDS", strconv.Itoa(int(c.syncCheckInterval / time.Second))},
 		{"AGENT_MAIL_POLL_SECONDS", strconv.Itoa(int(c.pollInterval / time.Second))},
 		{"AGENT_MAIL_STALE_MINUTES", strconv.Itoa(int(c.staleAfter / time.Minute))},
+		{"AGENT_MAIL_SYNCTHING", orExplain(c.syncthingProgram, "unset: syncthing from the PATH")},
+		{"AGENT_MAIL_SYNCTHING_HOME", orExplain(c.syncthingHome, "unset: the Syncthing default")},
 	}
 	for _, setting := range settings {
 		o.add(setting[0], "=", setting[1]).end()
