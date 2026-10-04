@@ -2,9 +2,24 @@
 
 A mailbox for agent sessions, on one machine or several: direct mail, mailing lists, membership, and an optional hard deadline. Every message is a markdown file in a folder that a sync tool keeps identical everywhere. After the deadline, every command fails with a `DEAD:` line.
 
-It works for any agent that can run a shell command, such as Claude Code or Codex, and they can mail each other.
+It is one small Go program with no dependencies beyond the standard library, for Linux, macOS and Windows. Any agent that can run a command can use it, such as Claude Code or Codex, and they can mail each other.
 
-## Install
+## Install the binary
+
+Download your platform's file and `SHA256SUMS` from [Releases](https://github.com/nidduzzi/agent-mail/releases), verify both, then put the file on your `PATH` as `agent-mail`:
+
+```
+gh release download v0.3.0 --repo nidduzzi/agent-mail --pattern 'agent-mail_v0.3.0_linux_amd64' --pattern SHA256SUMS
+sha256sum -c SHA256SUMS --ignore-missing
+gh attestation verify agent-mail_v0.3.0_linux_amd64 --repo nidduzzi/agent-mail
+install -m 755 agent-mail_v0.3.0_linux_amd64 ~/.local/bin/agent-mail
+```
+
+On macOS use `shasum -a 256 -c SHA256SUMS --ignore-missing`. On Windows compare `Get-FileHash agent-mail_v0.3.0_windows_amd64.exe` with its line in `SHA256SUMS`, then save the file as `agent-mail.exe` in a folder on your `PATH`. The attestation check proves the file was built by this repository's release workflow from the tagged commit.
+
+Or build it from source with Go 1.22 or later: `go install github.com/nidduzzi/agent-mail@v0.3.0`.
+
+## Add the skill
 
 Claude Code, as a plugin:
 
@@ -15,7 +30,7 @@ Claude Code, as a plugin:
 
 Agents that read `SKILL.md` folders: copy `plugins/agent-mail/skills/agent-mail/` into that agent's skills directory, for example `~/.claude/skills/`.
 
-Agents without skills: put `agent-mail` on the `PATH`, and add this to the agent's instructions file (such as `AGENTS.md`):
+Agents without skills: add this to the agent's instructions file (such as `AGENTS.md`):
 
 ```
 Mail with other agents goes through `agent-mail`. Start every session with
@@ -35,7 +50,7 @@ AGENT_MAIL_SELF=builder agent-mail join builder
 agent-mail list set team planner builder
 ```
 
-Each agent then runs with its own `AGENT_MAIL_SELF`. Shared settings go in `~/.config/agent-mail/config` as `KEY=value` lines; `agent-mail config` lists every key.
+Each agent then runs with its own `AGENT_MAIL_SELF`. Shared settings go in a `config` file as `KEY=value` lines, in the platform's config directory: `~/.config/agent-mail/` on Linux, `~/Library/Application Support/agent-mail/` on macOS, `%AppData%\agent-mail\` on Windows. `agent-mail config` shows its path and every key.
 
 ## Layout
 
@@ -50,13 +65,15 @@ Each agent then runs with its own `AGENT_MAIL_SELF`. Shared settings go in `~/.c
 
 Each file has one writer: members write their own entry, senders write new files, and only the owner moves mail out of an inbox. Two machines therefore never edit the same file, which keeps the folder safe to sync. A message begins with an `id`, `from`, `to` and optional `in-reply-to` header between `---` lines.
 
-## Platforms
+## Development
 
-It needs bash 3.2 or later and standard Unix tools. The tests pass on Linux with bash 5 and bash 3.2. The macOS branch, which uses BSD `date`, is written but not yet tested on a Mac. On Windows it runs under Git Bash or WSL, but not in PowerShell or cmd.
+The behaviour tests in `tests/agent-mail.test.sh` drive the built binary from the outside. CI runs them on Linux, macOS and Windows:
 
 ```
-bash tests/agent-mail.test.sh
+go build -trimpath -o agent-mail . && bash tests/agent-mail.test.sh
 ```
+
+A `v*` tag builds the release binaries for six platforms with `-trimpath` and a pinned Go version, writes `SHA256SUMS`, and attests their build provenance.
 
 ## Transport
 
