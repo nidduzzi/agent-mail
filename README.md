@@ -177,7 +177,7 @@ MIN_EFFICACY=90 bash tests/mutation.sh                                  # mutati
 
 The stateful fuzz target drives random sequences of join, leave, send, list, ack, who and waiting against a model of the mailbox, and checks the files after every step. Each bug it should never miss again is pinned by name in `pinnedSequences`. Neither script writes anything git tracks.
 
-CI runs the tests and the pinned fuzz cases on Linux, macOS and Windows, fuzzes each target for 30 seconds, and fails when mutation efficacy drops below 90%. Every night each fuzz target runs for 55 minutes in parallel, building on the corpus of earlier nights from the Actions cache. A `v*` tag builds six reproducible binaries with a pinned Go version, writes `SHA256SUMS`, attests their provenance and publishes the release.
+CI runs the tests and the pinned fuzz cases on Linux, macOS and Windows, fuzzes each target for 30 seconds, and fails when mutation efficacy drops below 90%. Every night each fuzz target runs for 55 minutes in parallel, building on the corpus of earlier nights from the Actions cache. Changes go under `[Unreleased]` in [CHANGELOG.md](CHANGELOG.md); a release renames that section to its version. A `v*` tag fails without its section, and its section becomes the release notes. The tag builds six reproducible binaries with a pinned Go version, writes `SHA256SUMS`, attests their provenance and publishes the release.
 
 ## 📜 License
 
