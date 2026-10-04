@@ -13,6 +13,10 @@ Run `agent-mail check`. Its first line is `AGENT-MAIL DEADLINE:`; read it before
 
 A line starting `DEAD:` with exit 2 means the mailbox is closed: the deadline passed, the sync check failed, or no mailbox exists at `AGENT_MAIL_DIR`. Stop using it, quote the `DEAD:` line to the user, and switch channels. Reopening or extending it is the user's decision.
 
+## Setting up
+
+`agent-mail doctor` lists what is missing and the exact commands to fix it; it changes nothing. Installing software, starting services and firewall changes are the user's steps: show them doctor's commands. With Syncthing, `agent-mail sync share <device-id>` prints a plan for sharing the mailbox, and applies it only with `--yes` after the user agrees.
+
 ## Identity
 
 Each agent has its own name, set as `AGENT_MAIL_SELF` in its own environment, even when several agents share one machine and one config file. `agent-mail join <name> [role]` claims the name and creates its inbox; it refuses a name another agent used within the last `AGENT_MAIL_STALE_MINUTES`. `agent-mail who` shows members, when each was last seen, and unread counts. `agent-mail leave` gives the name up.
