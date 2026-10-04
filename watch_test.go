@@ -1,7 +1,6 @@
 package main
 
 import (
-	"io"
 	"os"
 	"testing"
 	"time"
@@ -9,26 +8,8 @@ import (
 
 func joinedWatcher(tb testing.TB) (*watcher, time.Time) {
 	tb.Helper()
-	dir := tb.TempDir()
-	start := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
-	a := agent{
-		cfg: config{
-			self:              "beta",
-			dir:               dir,
-			syncCheckInterval: time.Minute,
-			pollInterval:      time.Second,
-			staleAfter:        30 * time.Minute,
-		},
-		box:   mailbox{dir: dir},
-		now:   func() time.Time { return start },
-		host:  "test-host",
-		stdin: nil,
-		out:   newOutput(io.Discard),
-		quiet: newOutput(io.Discard),
-	}
-	if err := a.createMailbox([]string{"--deadline", "2031-01-01 00:00"}); err != nil {
-		tb.Fatal(err)
-	}
+	start := testStart
+	a := newTestAgent(tb, &start, "2031-01-01 00:00").as("beta")
 	if err := a.join([]string{"beta"}); err != nil {
 		tb.Fatal(err)
 	}
@@ -65,6 +46,44 @@ func TestPollStopsAtTheDeadline(t *testing.T) {
 	err := w.poll(time.Date(2031, 1, 1, 0, 0, 0, 0, time.UTC))
 	if _, dead := err.(deadError); !dead {
 		t.Fatalf("poll at the deadline returned %v, want a deadError", err)
+	}
+}
+
+func TestRescanFindsMailThatKeptTheInboxTime(t *testing.T) {
+	w, now := joinedWatcher(t)
+	var announced testWriter
+	w.agent.out = newOutput(&announced)
+	if err := w.poll(now); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(w.inbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(w.inbox+"/synced.md", []byte("---\nfrom: alpha\n---\nhi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(w.inbox, before.ModTime(), before.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	for _, at := range []time.Duration{time.Second, fullRescanEvery, fullRescanEvery + time.Second, 2*fullRescanEvery + time.Second} {
+		if err := w.poll(now.Add(at)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, want := string(announced), "NEW MAIL: synced.md from alpha\n"; got != want {
+		t.Fatalf("announced %q, want %q", got, want)
+	}
+}
+
+func TestPollDiesWhenTheInboxIsGone(t *testing.T) {
+	w, now := joinedWatcher(t)
+	if err := os.RemoveAll(w.inbox); err != nil {
+		t.Fatal(err)
+	}
+	err := w.poll(now.Add(time.Second))
+	if _, dead := err.(deadError); !dead {
+		t.Fatalf("poll without an inbox returned %v, want a deadError", err)
 	}
 }
 

@@ -170,8 +170,12 @@ Settings live in `config` (`KEY=value`) in the platform config directory: `~/.co
 
 ```sh
 go build -trimpath -o agent-mail . && bash tests/agent-mail.test.sh   # behaviour tests, from the outside
-go test -bench . ./...                                                  # unit tests + allocations per watch poll
+go test -bench . ./...                                                  # unit tests, pinned fuzz cases + allocations per watch poll
+FUZZTIME=1m bash tests/fuzz.sh                                          # fuzz every target, including the stateful mailbox model
+bash tests/mutation.sh                                                  # mutation testing with gremlins, run from its pinned version
 ```
+
+The stateful fuzz target drives random sequences of join, leave, send, list, ack, who and waiting against a model of the mailbox, and checks the files after every step. Each bug it should never miss again is pinned by name in `pinnedSequences`. Neither script writes anything git tracks.
 
 CI runs both on Linux, macOS and Windows. A `v*` tag builds six reproducible binaries with a pinned Go version, writes `SHA256SUMS`, attests their provenance and publishes the release.
 
