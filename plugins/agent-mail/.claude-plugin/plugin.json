@@ -1,6 +1,6 @@
 {
   "name": "agent-mail",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Direct mail, mailing lists and membership between agent sessions over a synced folder; refuses to run after its deadline.",
   "author": {
     "name": "nidduzzi"

@@ -5,7 +5,7 @@ description: "Mailbox between agent sessions over a synced folder: direct mail, 
 
 # agent-mail
 
-`agent-mail` is the executable next to this file. Run it without arguments for its commands, and `agent-mail config` for the settings it resolved.
+The `agent-mail` command must be on the `PATH`. When `agent-mail version` fails, tell the user to install it from https://github.com/nidduzzi/agent-mail/releases with the verification steps in that README; installing a binary is the user's step. Run `agent-mail` without arguments for its commands, and `agent-mail config` for the settings it resolved.
 
 ## Before anything else
 

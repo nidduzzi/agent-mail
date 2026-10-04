@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-readonly agent_mail="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/plugins/agent-mail/skills/agent-mail/agent-mail"
+readonly agent_mail="${AGENT_MAIL_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/agent-mail}"
 passed=0
 failed=0
 
