@@ -125,22 +125,49 @@ test_the_sync_check() {
   expect "a failing sync check makes it DEAD" 2 "DEAD: the sync check failed" env AGENT_MAIL_SYNC_CHECK=false AGENT_MAIL_CONFIG=/dev/null AGENT_MAIL_DIR="$mailbox" AGENT_MAIL_SELF=alpha "$agent_mail" check
 }
 
+start_watch() {
+  local agent="$1" seconds="$2"
+  watch_log="$(mktemp)"
+  AGENT_MAIL_POLL_SECONDS=1 AGENT_MAIL_CONFIG=/dev/null AGENT_MAIL_DIR="$mailbox" AGENT_MAIL_SELF="$agent" \
+    "$agent_mail" watch > "$watch_log" 2>&1 &
+  watch_pid=$!
+  ( sleep "$seconds"; kill "$watch_pid" 2>/dev/null ) &
+  watch_timer_pid=$!
+}
+
+finish_watch() {
+  wait "$watch_pid"
+  watch_status=$?
+  kill "$watch_timer_pid" 2>/dev/null
+  wait "$watch_timer_pid" 2>/dev/null
+}
+
+watch_result() {
+  cat "$watch_log"
+  return "$watch_status"
+}
+
 test_watching_the_inbox() {
   fresh_mailbox
   printf 'already here\n' | as alpha send beta before-watch >/dev/null
-  local log
-  log="$(mktemp)"
-  AGENT_MAIL_POLL_SECONDS=1 timeout 6 env AGENT_MAIL_CONFIG=/dev/null AGENT_MAIL_DIR="$mailbox" AGENT_MAIL_SELF=beta "$agent_mail" watch > "$log" 2>&1 &
-  local watching=$!
+  start_watch beta 6
   sleep 2
   printf 'first\n' | as alpha send beta during-watch-one >/dev/null
   sleep 2
   printf 'second\n' | as gamma send beta during-watch-two >/dev/null
-  wait "$watching"
-  expect "watch announces mail that arrives" 0 "NEW MAIL: .*during-watch-one.md from alpha" cat "$log"
-  expect "watch announces every arrival" 0 "NEW MAIL: .*during-watch-two.md from gamma" cat "$log"
-  expect_absent "watch stays quiet about mail that was already there" "before-watch" cat "$log"
-  expect "watch exits with DEAD when the inbox disappears" 2 "DEAD: the inbox" bash -c "rm -r '$mailbox/to-beta' && AGENT_MAIL_POLL_SECONDS=1 timeout 5 env AGENT_MAIL_CONFIG=/dev/null AGENT_MAIL_DIR='$mailbox' AGENT_MAIL_SELF=gamma '$agent_mail' watch & sleep 1; mkdir -p '$mailbox/to-beta/read'; AGENT_MAIL_CONFIG=/dev/null AGENT_MAIL_DIR='$mailbox' AGENT_MAIL_SELF=beta '$agent_mail' join beta >/dev/null; rm -r '$mailbox/to-gamma'; wait \$!"
+  finish_watch
+  expect "watch announces mail that arrives" 0 "NEW MAIL: .*during-watch-one.md from alpha" cat "$watch_log"
+  expect "watch announces every arrival" 0 "NEW MAIL: .*during-watch-two.md from gamma" cat "$watch_log"
+  expect_absent "watch stays quiet about mail that was already there" "before-watch" cat "$watch_log"
+}
+
+test_watch_ends_when_the_inbox_disappears() {
+  fresh_mailbox
+  start_watch gamma 6
+  sleep 1
+  rm -r "$mailbox/to-gamma"
+  finish_watch
+  expect "watch exits with DEAD when the inbox disappears" 2 "DEAD: the inbox" watch_result
 }
 
 test_untrusted_input_is_refused() {
@@ -169,7 +196,11 @@ test_config_mistakes_are_refused() {
 
 test_leaving_ends_a_running_watch() {
   fresh_mailbox
-  expect "watch stops once its member has left" 1 "no longer a member" bash -c "AGENT_MAIL_CONFIG=/dev/null AGENT_MAIL_DIR='$mailbox' AGENT_MAIL_SELF=beta AGENT_MAIL_POLL_SECONDS=1 timeout 6 '$agent_mail' watch & sleep 1; rm '$mailbox/members/beta'; wait \$!"
+  start_watch beta 6
+  sleep 1
+  rm "$mailbox/members/beta"
+  finish_watch
+  expect "watch stops once its member has left" 1 "no longer a member" watch_result
 }
 
 test_leaving() {
