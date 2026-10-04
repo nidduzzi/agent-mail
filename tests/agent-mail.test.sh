@@ -203,7 +203,12 @@ test_leaving_ends_a_running_watch() {
   expect "watch stops once its member has left" 1 "no longer a member" watch_result
 }
 
-readonly fake_syncthing="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fake-syncthing"
+readonly test_tools="$(mktemp -d)"
+readonly fake_syncthing="$test_tools/fake-syncthing$(go env GOEXE)"
+if ! (cd "$(dirname "${BASH_SOURCE[0]}")/.." && go build -o "$fake_syncthing" ./tests/fakesyncthing); then
+  echo "FAIL building the fake syncthing with go build"
+  exit 1
+fi
 readonly this_device="AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH"
 readonly peer_device="ZZZZZZZ-YYYYYYY-XXXXXXX-WWWWWWW-VVVVVVV-UUUUUUU-TTTTTTT-SSSSSSS"
 
@@ -214,13 +219,6 @@ with_syncthing() {
 fresh_syncthing() {
   syncthing_state="$(mktemp -d)"
   printf '%s\n' "$this_device" > "$syncthing_state/id"
-}
-
-on_windows() {
-  case "$(uname -s)" in
-    MINGW* | MSYS* | CYGWIN*) return 0 ;;
-    *) return 1 ;;
-  esac
 }
 
 test_doctor_explains_what_is_missing() {
@@ -234,10 +232,6 @@ test_doctor_explains_what_is_missing() {
 }
 
 test_syncthing_sharing() {
-  if on_windows; then
-    echo "skip syncthing tests: Windows cannot launch the bash fake as a program"
-    return
-  fi
   fresh_mailbox
   fresh_syncthing
   expect "sync id prints this device's ID" 0 "$this_device" with_syncthing as alpha sync id
