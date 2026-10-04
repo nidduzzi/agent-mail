@@ -3,6 +3,7 @@ package main
 import (
 	"io"
 	"strconv"
+	"unicode/utf8"
 )
 
 type output struct {
@@ -36,7 +37,7 @@ func (o *output) twoDigits(n int64) *output {
 
 func (o *output) cell(text string, width int) *output {
 	o.buf = append(o.buf, text...)
-	for i := len(text); i < width; i++ {
+	for i := utf8.RuneCountInString(text); i < width; i++ {
 		o.buf = append(o.buf, ' ')
 	}
 	return o

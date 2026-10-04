@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const presenceRefresh = 5 * time.Minute
@@ -104,7 +105,8 @@ func (a agent) who() error {
 	if err != nil {
 		return err
 	}
-	a.out.cell("NAME", 21).cell("ROLE", 21).cell("HOST", 21).cell("LAST-SEEN", 13).add("UNREAD").end()
+	rows := make([][5]string, 1, len(entries)+1)
+	rows[0] = [5]string{"NAME", "ROLE", "HOST", "LAST-SEEN", "UNREAD"}
 	now := a.now()
 	for _, entry := range entries {
 		if !entry.Type().IsRegular() || !validName(entry.Name()) {
@@ -123,7 +125,19 @@ func (a agent) who() error {
 		if idle >= a.cfg.staleAfter {
 			lastSeen = "stale " + strconv.Itoa(int(idle.Minutes())) + "m"
 		}
-		a.out.cell(m.name, 21).cell(printable(m.role), 21).cell(printable(m.host), 21).cell(lastSeen, 13).num(int64(unread)).end()
+		rows = append(rows, [5]string{m.name, printable(m.role), printable(m.host), lastSeen, strconv.Itoa(unread)})
+	}
+	var widths [5]int
+	for _, row := range rows {
+		for i, text := range row {
+			widths[i] = max(widths[i], utf8.RuneCountInString(text))
+		}
+	}
+	for _, row := range rows {
+		for i, text := range row[:4] {
+			a.out.cell(text, widths[i]+2)
+		}
+		a.out.add(row[4]).end()
 	}
 	return nil
 }
