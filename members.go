@@ -2,7 +2,6 @@ package main
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -36,17 +35,21 @@ func readMember(box mailbox, name string) (member, error) {
 }
 
 func (m member) render() string {
-	return fmt.Sprintf("role: %s\nhost: %s\njoined: %s\nseen: %d\n", m.role, m.host, m.joined, m.seen.Unix())
+	return "role: " + m.role + "\nhost: " + m.host + "\njoined: " + m.joined + "\nseen: " + strconv.FormatInt(m.seen.Unix(), 10) + "\n"
+}
+
+func (m member) write(box mailbox) error {
+	return replaceFileAtomically(box.memberFile(m.name), m.render())
 }
 
 func headerFields(text string) map[string]string {
-	fields := map[string]string{}
-	for _, line := range strings.Split(text, "\n") {
+	fields := make(map[string]string, 6)
+	for len(text) > 0 {
+		line, rest, _ := strings.Cut(text, "\n")
+		text = rest
 		key, value, found := strings.Cut(line, ": ")
-		if found {
-			if _, seen := fields[key]; !seen {
-				fields[key] = value
-			}
+		if _, seen := fields[key]; found && !seen {
+			fields[key] = value
 		}
 	}
 	return fields
@@ -56,30 +59,31 @@ func (a agent) join(args []string) error {
 	if len(args) < 1 || len(args) > 2 {
 		return errors.New("usage: agent-mail join <name> [role]")
 	}
-	name, role := args[0], ""
+	joining := member{name: args[0], host: printable(a.host), joined: a.now().UTC().Format(time.RFC3339), seen: a.now()}
 	if len(args) == 2 {
-		role = args[1]
+		joining.role = args[1]
 	}
-	if !namePattern.MatchString(name) {
-		return errors.New("a name is lowercase letters, digits and dashes")
+	if !validName(joining.name) {
+		return errors.New("a name is 1 to 64 lowercase letters, digits and dashes")
 	}
-	joined := a.now().UTC().Format(time.RFC3339)
-	if existing, err := readMember(a.box, name); err == nil {
+	if !validLine(joining.role) {
+		return errors.New("a role is one line of at most 200 printable characters")
+	}
+	if existing, err := readMember(a.box, joining.name); err == nil {
 		idle := a.now().Sub(existing.seen)
 		if idle < a.cfg.staleAfter {
-			return fmt.Errorf("'%s' is taken: seen %d min ago on %s", name, int(idle.Minutes()), existing.host)
+			return errors.New("'" + joining.name + "' is taken: seen " + strconv.Itoa(int(idle.Minutes())) + " min ago on " + printable(existing.host))
 		}
-		fmt.Fprintf(a.stdout, "taking over '%s', idle for %d min\n", name, int(idle.Minutes()))
-		joined = existing.joined
+		a.out.add("taking over '", joining.name, "', idle for ").num(int64(idle.Minutes())).add(" min").end()
+		joining.joined = existing.joined
 	}
-	if err := os.MkdirAll(a.box.readDir(name), 0o755); err != nil {
+	if err := os.MkdirAll(a.box.readDir(joining.name), 0o755); err != nil {
 		return err
 	}
-	joining := member{name: name, role: role, host: a.host, joined: joined, seen: a.now()}
-	if err := writeFileAtomically(a.box.memberFile(name), joining.render()); err != nil {
+	if err := joining.write(a.box); err != nil {
 		return err
 	}
-	fmt.Fprintf(a.stdout, "joined as '%s'; this agent now needs AGENT_MAIL_SELF=%s\n", name, name)
+	a.out.add("joined as '", joining.name, "'; this agent now needs AGENT_MAIL_SELF=", joining.name).end()
 	return nil
 }
 
@@ -87,7 +91,7 @@ func (a agent) leave() error {
 	if err := os.Remove(a.box.memberFile(a.cfg.self)); err != nil {
 		return err
 	}
-	fmt.Fprintf(a.stdout, "'%s' left; its inbox to-%s/ is kept\n", a.cfg.self, a.cfg.self)
+	a.out.add("'", a.cfg.self, "' left; its inbox to-", a.cfg.self, "/ is kept").end()
 	return nil
 }
 
@@ -96,31 +100,35 @@ func (a agent) who() error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(a.stdout, "%-20s %-20s %-20s %-12s %s\n", "NAME", "ROLE", "HOST", "LAST-SEEN", "UNREAD")
+	a.out.cell("NAME", 21).cell("ROLE", 21).cell("HOST", 21).cell("LAST-SEEN", 13).add("UNREAD").end()
+	now := a.now()
 	for _, entry := range entries {
-		if !entry.Type().IsRegular() || strings.HasPrefix(entry.Name(), ".") {
+		if !entry.Type().IsRegular() || !validName(entry.Name()) {
 			continue
 		}
 		m, err := readMember(a.box, entry.Name())
 		if err != nil {
 			return err
 		}
-		idle := int(a.now().Sub(m.seen).Minutes())
-		lastSeen := fmt.Sprintf("%dm ago", idle)
-		if a.now().Sub(m.seen) >= a.cfg.staleAfter {
-			lastSeen = fmt.Sprintf("stale %dm", idle)
-		}
-		unread, err := messagesIn(a.box.inbox(m.name))
+		unread, err := countMessages(a.box.inbox(m.name))
 		if err != nil {
-			return err
+			unread = 0
 		}
-		fmt.Fprintf(a.stdout, "%-20s %-20s %-20s %-12s %d\n", m.name, m.role, m.host, lastSeen, len(unread))
+		idle := now.Sub(m.seen)
+		lastSeen := strconv.Itoa(int(idle.Minutes())) + "m ago"
+		if idle >= a.cfg.staleAfter {
+			lastSeen = "stale " + strconv.Itoa(int(idle.Minutes())) + "m"
+		}
+		a.out.cell(m.name, 21).cell(printable(m.role), 21).cell(printable(m.host), 21).cell(lastSeen, 13).num(int64(unread)).end()
 	}
 	return nil
 }
 
 func (a agent) recordPresence() error {
 	m, err := readMember(a.box, a.cfg.self)
+	if errors.Is(err, os.ErrNotExist) {
+		return errors.New("'" + a.cfg.self + "' is no longer a member of this mailbox")
+	}
 	if err != nil {
 		return err
 	}
@@ -128,5 +136,5 @@ func (a agent) recordPresence() error {
 		return nil
 	}
 	m.seen = a.now()
-	return writeFileAtomically(a.box.memberFile(m.name), m.render())
+	return m.write(a.box)
 }

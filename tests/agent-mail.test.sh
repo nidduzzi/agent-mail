@@ -69,7 +69,7 @@ test_joining_and_names() {
   expect "a fresh name cannot be taken twice" 1 "is taken" as delta join alpha
   expect "a stale name can be taken over" 0 "taking over" env AGENT_MAIL_STALE_MINUTES=0 AGENT_MAIL_CONFIG=/dev/null AGENT_MAIL_DIR="$mailbox" "$agent_mail" join alpha
   expect "names are validated" 1 "lowercase" as x join "Bad Name"
-  expect "commands need a joined identity" 1 "has not joined" as delta inbox
+  expect "commands need a joined identity" 1 "is not a member" as delta inbox
 }
 
 test_two_agents_on_one_machine() {
@@ -118,10 +118,58 @@ test_a_dead_mailbox() {
   expect "an invalid deadline is refused at init" 1 "UTC" env AGENT_MAIL_CONFIG=/dev/null AGENT_MAIL_DIR="$(mktemp -d)/m" "$agent_mail" init --deadline "next week"
 }
 
-test_a_failing_sync_check() {
+test_the_sync_check() {
   fresh_mailbox --deadline "2099-01-01 00:00"
   expect "a live deadline shows time left" 0 "time left" as alpha check
+  expect "a passing sync check keeps it live" 0 "time left" env AGENT_MAIL_SYNC_CHECK=true AGENT_MAIL_CONFIG=/dev/null AGENT_MAIL_DIR="$mailbox" AGENT_MAIL_SELF=alpha "$agent_mail" check
   expect "a failing sync check makes it DEAD" 2 "DEAD: the sync check failed" env AGENT_MAIL_SYNC_CHECK=false AGENT_MAIL_CONFIG=/dev/null AGENT_MAIL_DIR="$mailbox" AGENT_MAIL_SELF=alpha "$agent_mail" check
+}
+
+test_watching_the_inbox() {
+  fresh_mailbox
+  printf 'already here\n' | as alpha send beta before-watch >/dev/null
+  local log
+  log="$(mktemp)"
+  AGENT_MAIL_POLL_SECONDS=1 timeout 6 env AGENT_MAIL_CONFIG=/dev/null AGENT_MAIL_DIR="$mailbox" AGENT_MAIL_SELF=beta "$agent_mail" watch > "$log" 2>&1 &
+  local watching=$!
+  sleep 2
+  printf 'first\n' | as alpha send beta during-watch-one >/dev/null
+  sleep 2
+  printf 'second\n' | as gamma send beta during-watch-two >/dev/null
+  wait "$watching"
+  expect "watch announces mail that arrives" 0 "NEW MAIL: .*during-watch-one.md from alpha" cat "$log"
+  expect "watch announces every arrival" 0 "NEW MAIL: .*during-watch-two.md from gamma" cat "$log"
+  expect_absent "watch stays quiet about mail that was already there" "before-watch" cat "$log"
+  expect "watch exits with DEAD when the inbox disappears" 2 "DEAD: the inbox" bash -c "rm -r '$mailbox/to-beta' && AGENT_MAIL_POLL_SECONDS=1 timeout 5 env AGENT_MAIL_CONFIG=/dev/null AGENT_MAIL_DIR='$mailbox' AGENT_MAIL_SELF=gamma '$agent_mail' watch & sleep 1; mkdir -p '$mailbox/to-beta/read'; AGENT_MAIL_CONFIG=/dev/null AGENT_MAIL_DIR='$mailbox' AGENT_MAIL_SELF=beta '$agent_mail' join beta >/dev/null; rm -r '$mailbox/to-gamma'; wait \$!"
+}
+
+test_untrusted_input_is_refused() {
+  fresh_mailbox
+  expect "a recipient path cannot leave the mailbox" 1 "unknown recipients" as alpha send "beta/../../../tmp" escape <<<"hi"
+  expect "a list name cannot be a path" 1 "usage: agent-mail list delete" as alpha list delete ../members/beta
+  [ -f "$mailbox/members/beta" ] && passed=$(( passed + 1 )) && echo "ok   a member survives a path-shaped list delete" \
+    || { failed=$(( failed + 1 )); echo "FAIL a member survives a path-shaped list delete"; }
+  expect "a role cannot inject header lines" 1 "one line" as delta join delta "$(printf 'x\nseen: 99999999999')"
+  expect "a reply-to cannot inject header lines" 1 "reply-to takes a message id" as alpha send --reply-to "$(printf 'x\nfrom: mallory')" beta forged <<<"hi"
+  expect "ack refuses names that are not messages" 1 "usage: agent-mail ack" as beta ack ..
+  expect "a body over 1 MiB is refused" 1 "over 1048576 bytes" bash -c "head -c 1048600 /dev/zero | tr '\\0' 'a' | AGENT_MAIL_CONFIG=/dev/null AGENT_MAIL_DIR='$mailbox' AGENT_MAIL_SELF=alpha '$agent_mail' send beta big"
+  printf -- '---\nid: x\nfrom: \033[31mred\n---\nhi\n' > "$mailbox/to-beta/20990101T000000Z-forged.md"
+  expect "inbox does not echo control characters from a sender field" 0 "from (unknown sender)" as beta inbox
+  expect "an invalid AGENT_MAIL_SELF is refused" 1 "not a valid name" as "../members/beta" inbox
+}
+
+test_config_mistakes_are_refused() {
+  fresh_mailbox
+  local config_file
+  config_file="$(mktemp)"
+  printf 'AGENT_MAIL_DIRR=%s\n' "$mailbox" > "$config_file"
+  expect "an unknown setting in the config file is refused" 1 "unknown setting 'AGENT_MAIL_DIRR'" env AGENT_MAIL_CONFIG="$config_file" AGENT_MAIL_DIR="$mailbox" "$agent_mail" check
+  expect "a relative AGENT_MAIL_DIR is refused" 1 "absolute path" env AGENT_MAIL_CONFIG=/dev/null AGENT_MAIL_DIR=relative/mail "$agent_mail" check
+}
+
+test_leaving_ends_a_running_watch() {
+  fresh_mailbox
+  expect "watch stops once its member has left" 1 "no longer a member" bash -c "AGENT_MAIL_CONFIG=/dev/null AGENT_MAIL_DIR='$mailbox' AGENT_MAIL_SELF=beta AGENT_MAIL_POLL_SECONDS=1 timeout 6 '$agent_mail' watch & sleep 1; rm '$mailbox/members/beta'; wait \$!"
 }
 
 test_leaving() {

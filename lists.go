@@ -2,17 +2,25 @@ package main
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"strings"
 )
 
 func readList(box mailbox, name string) ([]string, error) {
+	if !validName(name) {
+		return nil, errors.New("a list name is lowercase letters, digits and dashes")
+	}
 	raw, err := os.ReadFile(box.listFile(name))
 	if err != nil {
 		return nil, err
 	}
-	return strings.Fields(string(raw)), nil
+	members := strings.Fields(string(raw))
+	for _, m := range members {
+		if !validName(m) {
+			return nil, errors.New("@" + name + " holds an invalid member name '" + printable(m) + "'")
+		}
+	}
+	return members, nil
 }
 
 func (a agent) manageLists(args []string) error {
@@ -22,20 +30,23 @@ func (a agent) manageLists(args []string) error {
 	}
 	switch action {
 	case "show":
+		if len(args) > 2 || (len(args) == 2 && !validName(args[1])) {
+			return errors.New("usage: agent-mail list show [list]")
+		}
 		return a.showLists(args[min(1, len(args)):])
 	case "set":
-		if len(args) < 3 || !namePattern.MatchString(args[1]) {
+		if len(args) < 3 || !validName(args[1]) {
 			return errors.New("usage: agent-mail list set <list> <member>...")
 		}
 		return a.setList(args[1], args[2:])
 	case "delete":
-		if len(args) != 2 {
+		if len(args) != 2 || !validName(args[1]) {
 			return errors.New("usage: agent-mail list delete <list>")
 		}
 		if err := os.Remove(a.box.listFile(args[1])); err != nil {
-			return fmt.Errorf("no list @%s", args[1])
+			return errors.New("no list @" + args[1])
 		}
-		fmt.Fprintf(a.stdout, "deleted @%s\n", args[1])
+		a.out.add("deleted @", args[1]).end()
 		return nil
 	default:
 		return errors.New("usage: agent-mail list [show [list] | set <list> <member>... | delete <list>]")
@@ -49,31 +60,32 @@ func (a agent) showLists(only []string) error {
 	}
 	for _, entry := range entries {
 		name := entry.Name()
-		if strings.HasPrefix(name, ".") || (len(only) > 0 && only[0] != name) {
+		if !validName(name) || (len(only) > 0 && only[0] != name) {
 			continue
 		}
 		members, err := readList(a.box, name)
 		if err != nil {
-			return err
+			a.out.add("@", name, ": (unreadable: ", err.Error(), ")").end()
+			continue
 		}
-		fmt.Fprintf(a.stdout, "@%s: %s\n", name, strings.Join(members, " "))
+		a.out.add("@", name, ": ", strings.Join(members, " ")).end()
 	}
 	return nil
 }
 
 func (a agent) setList(name string, members []string) error {
-	var unknown []string
+	unknown := make([]string, 0, len(members))
 	for _, m := range members {
-		if !isFile(a.box.memberFile(m)) {
-			unknown = append(unknown, m)
+		if !validName(m) || !isFile(a.box.memberFile(m)) {
+			unknown = append(unknown, printable(m))
 		}
 	}
 	if len(unknown) > 0 {
-		return fmt.Errorf("not members: %s (see agent-mail who)", strings.Join(unknown, " "))
+		return errors.New("not members: " + strings.Join(unknown, " ") + " (see agent-mail who)")
 	}
-	if err := writeFileAtomically(a.box.listFile(name), strings.Join(members, "\n")+"\n"); err != nil {
+	if err := replaceFileAtomically(a.box.listFile(name), strings.Join(members, "\n")+"\n"); err != nil {
 		return err
 	}
-	fmt.Fprintf(a.stdout, "@%s: %s\n", name, strings.Join(members, " "))
+	a.out.add("@", name, ": ", strings.Join(members, " ")).end()
 	return nil
 }

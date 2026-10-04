@@ -1,10 +1,7 @@
 package main
 
 import (
-	"bufio"
 	"errors"
-	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -14,32 +11,34 @@ import (
 )
 
 type config struct {
-	file         string
-	self         string
-	dir          string
-	syncCheck    string
-	pollInterval time.Duration
-	staleAfter   time.Duration
+	file              string
+	self              string
+	dir               string
+	syncCheck         string
+	syncCheckInterval time.Duration
+	pollInterval      time.Duration
+	staleAfter        time.Duration
 }
 
-var configKeys = []string{
-	"AGENT_MAIL_SELF",
-	"AGENT_MAIL_DIR",
-	"AGENT_MAIL_SYNC_CHECK",
-	"AGENT_MAIL_POLL_SECONDS",
-	"AGENT_MAIL_STALE_MINUTES",
+var configKeys = map[string]bool{
+	"AGENT_MAIL_SELF":               true,
+	"AGENT_MAIL_DIR":                true,
+	"AGENT_MAIL_SYNC_CHECK":         true,
+	"AGENT_MAIL_SYNC_CHECK_SECONDS": true,
+	"AGENT_MAIL_POLL_SECONDS":       true,
+	"AGENT_MAIL_STALE_MINUTES":      true,
 }
 
 func loadConfig(getenv func(string) string) (config, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return config{}, fmt.Errorf("no home directory: %w", err)
+		return config{}, errors.New("no home directory: " + err.Error())
 	}
 	file := getenv("AGENT_MAIL_CONFIG")
 	if file == "" {
 		configDir, err := os.UserConfigDir()
 		if err != nil {
-			return config{}, fmt.Errorf("no config directory: %w", err)
+			return config{}, errors.New("no config directory: " + err.Error())
 		}
 		file = filepath.Join(configDir, "agent-mail", "config")
 	}
@@ -56,44 +55,62 @@ func loadConfig(getenv func(string) string) (config, error) {
 		}
 		return fallback
 	}
-	pollSeconds, err := strconv.Atoi(value("AGENT_MAIL_POLL_SECONDS", "5"))
-	if err != nil || pollSeconds < 1 {
-		return config{}, errors.New("AGENT_MAIL_POLL_SECONDS must be a whole number of seconds, at least 1")
+	duration := func(key, fallback string, minimum int, unit time.Duration) (time.Duration, error) {
+		n, err := strconv.Atoi(value(key, fallback))
+		if err != nil || n < minimum {
+			return 0, errors.New(key + " must be a whole number, at least " + strconv.Itoa(minimum))
+		}
+		return time.Duration(n) * unit, nil
 	}
-	staleMinutes, err := strconv.Atoi(value("AGENT_MAIL_STALE_MINUTES", "30"))
-	if err != nil || staleMinutes < 0 {
-		return config{}, errors.New("AGENT_MAIL_STALE_MINUTES must be a whole number of minutes")
+	poll, err := duration("AGENT_MAIL_POLL_SECONDS", "5", 1, time.Second)
+	if err != nil {
+		return config{}, err
+	}
+	syncEvery, err := duration("AGENT_MAIL_SYNC_CHECK_SECONDS", "60", 1, time.Second)
+	if err != nil {
+		return config{}, err
+	}
+	staleAfter, err := duration("AGENT_MAIL_STALE_MINUTES", "30", 0, time.Minute)
+	if err != nil {
+		return config{}, err
+	}
+	dir := expandHome(value("AGENT_MAIL_DIR", filepath.Join(home, "agent-mail")), home)
+	if !filepath.IsAbs(dir) {
+		return config{}, errors.New("AGENT_MAIL_DIR must be an absolute path, so every agent finds the same mailbox: " + dir)
 	}
 	return config{
-		file:         file,
-		self:         value("AGENT_MAIL_SELF", ""),
-		dir:          expandHome(value("AGENT_MAIL_DIR", filepath.Join(home, "agent-mail")), home),
-		syncCheck:    value("AGENT_MAIL_SYNC_CHECK", ""),
-		pollInterval: time.Duration(pollSeconds) * time.Second,
-		staleAfter:   time.Duration(staleMinutes) * time.Minute,
+		file:              file,
+		self:              value("AGENT_MAIL_SELF", ""),
+		dir:               dir,
+		syncCheck:         value("AGENT_MAIL_SYNC_CHECK", ""),
+		syncCheckInterval: syncEvery,
+		pollInterval:      poll,
+		staleAfter:        staleAfter,
 	}, nil
 }
 
 func readConfigFile(path string) (map[string]string, error) {
-	values := map[string]string{}
-	f, err := os.Open(path)
+	values := make(map[string]string, len(configKeys))
+	raw, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return values, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("cannot read %s: %w", path, err)
+		return nil, errors.New("cannot read " + path + ": " + err.Error())
 	}
-	defer f.Close()
-	lines := bufio.NewScanner(f)
-	for lines.Scan() {
-		line := strings.TrimSpace(lines.Text())
-		key, raw, found := strings.Cut(line, "=")
-		if !found || strings.HasPrefix(line, "#") {
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		values[strings.TrimSpace(key)] = strings.Trim(strings.TrimSpace(raw), `"`)
+		rawKey, rawValue, found := strings.Cut(line, "=")
+		key := strings.TrimSpace(rawKey)
+		if !found || !configKeys[key] {
+			return nil, errors.New(path + ": unknown setting '" + printable(rawKey) + "' (see agent-mail config)")
+		}
+		values[key] = strings.Trim(strings.TrimSpace(rawValue), `"`)
 	}
-	return values, lines.Err()
+	return values, nil
 }
 
 func expandHome(path, home string) string {
@@ -103,17 +120,18 @@ func expandHome(path, home string) string {
 	return path
 }
 
-func (c config) print(w io.Writer) {
-	shown := map[string]string{
-		"AGENT_MAIL_SELF":          orExplain(c.self, "unset: the name of this agent in the mailbox"),
-		"AGENT_MAIL_DIR":           c.dir,
-		"AGENT_MAIL_SYNC_CHECK":    orExplain(c.syncCheck, "none: command that must succeed while the sync runs"),
-		"AGENT_MAIL_POLL_SECONDS":  strconv.Itoa(int(c.pollInterval / time.Second)),
-		"AGENT_MAIL_STALE_MINUTES": strconv.Itoa(int(c.staleAfter / time.Minute)),
+func (c config) print(o *output) {
+	settings := [...][2]string{
+		{"AGENT_MAIL_CONFIG", c.file},
+		{"AGENT_MAIL_SELF", orExplain(c.self, "unset: the name of this agent in the mailbox")},
+		{"AGENT_MAIL_DIR", c.dir},
+		{"AGENT_MAIL_SYNC_CHECK", orExplain(c.syncCheck, "none: command that must succeed while the sync runs")},
+		{"AGENT_MAIL_SYNC_CHECK_SECONDS", strconv.Itoa(int(c.syncCheckInterval / time.Second))},
+		{"AGENT_MAIL_POLL_SECONDS", strconv.Itoa(int(c.pollInterval / time.Second))},
+		{"AGENT_MAIL_STALE_MINUTES", strconv.Itoa(int(c.staleAfter / time.Minute))},
 	}
-	fmt.Fprintf(w, "AGENT_MAIL_CONFIG=%s\n", c.file)
-	for _, key := range configKeys {
-		fmt.Fprintf(w, "%s=%s\n", key, shown[key])
+	for _, setting := range settings {
+		o.add(setting[0], "=", setting[1]).end()
 	}
 }
 

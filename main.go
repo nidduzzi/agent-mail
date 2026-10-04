@@ -2,7 +2,6 @@ package main
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"time"
@@ -35,13 +34,13 @@ type deadError struct{ reason string }
 func (e deadError) Error() string { return "DEAD: " + e.reason }
 
 type agent struct {
-	cfg    config
-	box    mailbox
-	now    func() time.Time
-	host   string
-	stdin  io.Reader
-	stdout io.Writer
-	stderr io.Writer
+	cfg   config
+	box   mailbox
+	now   func() time.Time
+	host  string
+	stdin io.Reader
+	out   *output
+	quiet *output
 }
 
 func main() {
@@ -49,35 +48,39 @@ func main() {
 }
 
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	errOut := newOutput(stderr)
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, usage)
+		errOut.add(usage).end()
 		return exitRefused
 	}
 	cfg, err := loadConfig(os.Getenv)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		errOut.add(err.Error()).end()
 		return exitRefused
 	}
 	host, _ := os.Hostname()
 	a := agent{
-		cfg:    cfg,
-		box:    mailbox{dir: cfg.dir},
-		now:    time.Now,
-		host:   host,
-		stdin:  stdin,
-		stdout: stdout,
-		stderr: stderr,
+		cfg:   cfg,
+		box:   mailbox{dir: cfg.dir},
+		now:   time.Now,
+		host:  host,
+		stdin: stdin,
+		out:   newOutput(stdout),
+		quiet: newOutput(io.Discard),
 	}
 	err = a.dispatch(args[0], args[1:])
+	if err == nil {
+		err = a.out.err
+	}
 	var dead deadError
 	switch {
 	case err == nil:
 		return exitOK
 	case errors.As(err, &dead):
-		fmt.Fprintln(stderr, dead.Error())
+		errOut.add(dead.Error()).end()
 		return exitDead
 	default:
-		fmt.Fprintln(stderr, err)
+		errOut.add(err.Error()).end()
 		return exitRefused
 	}
 }
@@ -85,44 +88,44 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 func (a agent) dispatch(command string, args []string) error {
 	switch command {
 	case "version":
-		fmt.Fprintln(a.stdout, version)
+		a.out.add(version).end()
 		return nil
 	case "config":
-		a.cfg.print(a.stdout)
+		a.cfg.print(a.out)
 		return nil
 	case "init":
 		return a.createMailbox(args)
 	case "check":
-		return a.checkLive(a.stdout)
+		return a.checkLive(a.out)
 	case "join":
-		return a.whenLive(io.Discard, func() error { return a.join(args) })
+		return a.whenLive(a.quiet, func() error { return a.join(args) })
 	case "who":
-		return a.whenLive(a.stdout, a.who)
+		return a.whenLive(a.out, a.who)
 	case "leave":
-		return a.asMember(io.Discard, a.leave)
+		return a.asMember(a.quiet, a.leave)
 	case "list":
-		return a.whenLive(io.Discard, func() error { return a.manageLists(args) })
+		return a.whenLive(a.quiet, func() error { return a.manageLists(args) })
 	case "send":
-		return a.asMember(a.stdout, func() error { return a.send(args) })
+		return a.asMember(a.out, func() error { return a.send(args) })
 	case "inbox":
-		return a.asMember(a.stdout, a.inbox)
+		return a.asMember(a.out, a.inbox)
 	case "ack":
-		return a.asMember(io.Discard, func() error { return a.acknowledge(args) })
+		return a.asMember(a.quiet, func() error { return a.acknowledge(args) })
 	case "watch":
-		return a.asMember(io.Discard, a.watch)
+		return a.asMember(a.quiet, a.watch)
 	default:
 		return errors.New(usage)
 	}
 }
 
-func (a agent) whenLive(report io.Writer, action func() error) error {
+func (a agent) whenLive(report *output, action func() error) error {
 	if err := a.checkLive(report); err != nil {
 		return err
 	}
 	return action()
 }
 
-func (a agent) asMember(report io.Writer, action func() error) error {
+func (a agent) asMember(report *output, action func() error) error {
 	return a.whenLive(report, func() error {
 		if err := a.requireIdentity(); err != nil {
 			return err
