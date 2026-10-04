@@ -1,0 +1,14 @@
+{
+  "name": "agent-mail",
+  "description": "A file mailbox between agent sessions over a synced folder, with an optional hard deadline.",
+  "owner": {
+    "name": "nidduzzi"
+  },
+  "plugins": [
+    {
+      "name": "agent-mail",
+      "source": "./plugins/agent-mail",
+      "description": "Send, read, acknowledge and watch mail between agent sessions over a synced folder; refuses to run after its deadline."
+    }
+  ]
+}

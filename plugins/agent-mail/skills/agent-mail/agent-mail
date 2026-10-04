@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly config_file="${AGENT_MAIL_CONFIG:-$HOME/.config/agent-mail/config}"
+
+config_value() {
+  local key="$1" default="$2" line=""
+  if [ -n "${!key:-}" ]; then
+    printf '%s' "${!key}"
+    return
+  fi
+  if [ -f "$config_file" ]; then
+    line="$(grep -E "^[[:space:]]*$key=" "$config_file" | tail -1 || true)"
+  fi
+  local value="${line#*=}"
+  value="${value%\"}"
+  value="${value#\"}"
+  printf '%s' "${value:-$default}"
+}
+
+self="$(config_value AGENT_MAIL_SELF "")"
+mailbox_dir="$(config_value AGENT_MAIL_DIR "$HOME/agent-mail")"
+mailbox_dir="${mailbox_dir/#\~/$HOME}"
+deadline_utc="$(config_value AGENT_MAIL_DEADLINE "")"
+sync_unit="$(config_value AGENT_MAIL_UNIT "")"
+syncthing_home="$(config_value AGENT_MAIL_SYNCTHING_HOME "")"
+syncthing_home="${syncthing_home/#\~/$HOME}"
+peer_device_ids="$(config_value AGENT_MAIL_PEER_IDS "")"
+poll_seconds="$(config_value AGENT_MAIL_POLL_SECONDS 5)"
+inbox="$mailbox_dir/to-$self"
+readonly self mailbox_dir deadline_utc sync_unit syncthing_home peer_device_ids poll_seconds inbox
+
+show_config() {
+  printf '%s=%s\n' \
+    AGENT_MAIL_CONFIG "$config_file" \
+    AGENT_MAIL_SELF "$self" \
+    AGENT_MAIL_DIR "$mailbox_dir" \
+    AGENT_MAIL_DEADLINE "${deadline_utc:-(none, UTC 'YYYY-MM-DD HH:MM')}" \
+    AGENT_MAIL_UNIT "${sync_unit:-(none, systemd --user unit that must be active)}" \
+    AGENT_MAIL_SYNCTHING_HOME "${syncthing_home:-(none)}" \
+    AGENT_MAIL_PEER_IDS "${peer_device_ids:-(none, Syncthing device IDs to report on)}" \
+    AGENT_MAIL_POLL_SECONDS "$poll_seconds"
+}
+
+mailbox_is_live() {
+  if [ -z "$self" ]; then
+    echo "DEAD: AGENT_MAIL_SELF is not set in $config_file" >&2
+    return 2
+  fi
+
+  if [ -n "$deadline_utc" ]; then
+    local deadline now
+    if ! deadline="$(date -u -d "$deadline_utc UTC" +%s 2>/dev/null)"; then
+      echo "DEAD: AGENT_MAIL_DEADLINE '$deadline_utc' is not a UTC date" >&2
+      return 2
+    fi
+    now="$(date -u +%s)"
+    echo "AGENT-MAIL DEADLINE: $(date -u -d "@$deadline" '+%F %H:%M UTC') ($(date -d "@$deadline" '+%a %F %H:%M %Z'))"
+    if (( now >= deadline )); then
+      echo "DEAD: the deadline passed $(( (now - deadline) / 60 )) min ago; the mailbox is closed" >&2
+      return 2
+    fi
+    printf 'time left: %dh %02dm\n' $(( (deadline - now) / 3600 )) $(( (deadline - now) % 3600 / 60 ))
+  else
+    echo "AGENT-MAIL DEADLINE: none"
+  fi
+
+  if [ -n "$sync_unit" ] && ! systemctl --user is-active --quiet "$sync_unit"; then
+    echo "DEAD: $sync_unit is not running; nothing syncs" >&2
+    return 2
+  fi
+
+  if [ ! -d "$inbox/read" ]; then
+    echo "DEAD: inbox $inbox/read is missing" >&2
+    return 2
+  fi
+
+  if [ -n "$peer_device_ids" ] && [ -n "$syncthing_home" ] && command -v syncthing >/dev/null; then
+    local connections device_id
+    connections="$(syncthing cli --home="$syncthing_home" show connections 2>/dev/null || echo '{}')"
+    for device_id in $peer_device_ids; do
+      if ! python3 -c 'import json,sys; sys.exit(0 if json.loads(sys.argv[1]).get("connections",{}).get(sys.argv[2],{}).get("connected") else 1)' "$connections" "$device_id"; then
+        echo "WARNING: peer ${device_id%%-*} is not connected; mail queues and syncs on reconnect" >&2
+      fi
+    done
+  fi
+}
+
+send_message() {
+  local recipient="${1:?usage: agent-mail send <recipient> <slug> < body.md}"
+  local slug="${2:?usage: agent-mail send <recipient> <slug> < body.md}"
+  local recipient_dir="$mailbox_dir/to-$recipient"
+
+  if [[ ! "$slug" =~ ^[a-z0-9-]+$ ]]; then
+    echo "slug must be lowercase letters, digits and dashes" >&2
+    return 1
+  fi
+  if [ ! -d "$recipient_dir" ]; then
+    echo "no mailbox '$recipient'; known: $(find "$mailbox_dir" -mindepth 1 -maxdepth 1 -type d -name 'to-*' -printf '%f ' | sed 's/to-//g')" >&2
+    return 1
+  fi
+
+  local body
+  body="$(cat)"
+  if [ -z "$body" ]; then
+    echo "empty message" >&2
+    return 1
+  fi
+  if grep -E -i -q '(password|passwd|secret|token|api[_-]?key|private[_-]?key)[[:space:]]*[=:][[:space:]]*[^[:space:]<]{6,}|BEGIN [A-Z ]*PRIVATE KEY' <<<"$body"; then
+    echo "refused: the body looks like it carries a secret" >&2
+    return 1
+  fi
+
+  local name partial
+  name="$(date -u +%Y%m%dT%H%M%SZ)-from-$self-$slug.md"
+  partial="$recipient_dir/.$name.tmp"
+  printf '%s\n' "$body" > "$partial"
+  mv "$partial" "$recipient_dir/$name"
+  echo "sent: to-$recipient/$name"
+}
+
+list_mail() {
+  echo "unread in to-$self:"
+  find "$inbox" -maxdepth 1 -type f -name '*.md' -printf '  %f\n' | sort
+  echo "sent by $self, not yet read by the recipient:"
+  find "$mailbox_dir" -mindepth 2 -maxdepth 2 -type f -name "*-from-$self-*.md" -printf '  %P\n' | sort
+}
+
+acknowledge() {
+  local message
+  message="$(basename "${1:?usage: agent-mail ack <file in the inbox>}")"
+  mv "$inbox/$message" "$inbox/read/$message"
+  echo "acked: $message"
+}
+
+watch_inbox() {
+  local -A announced=()
+  local message failure
+  for message in "$inbox"/*.md; do
+    [ -e "$message" ] && announced["$message"]=1
+  done
+  while true; do
+    if ! failure="$(mailbox_is_live 2>&1 >/dev/null)"; then
+      grep '^DEAD:' <<<"$failure"
+      return 2
+    fi
+    for message in "$inbox"/*.md; do
+      if [ -e "$message" ] && [ -z "${announced[$message]:-}" ]; then
+        announced["$message"]=1
+        echo "NEW MAIL: $(basename "$message")"
+      fi
+    done
+    sleep "$poll_seconds"
+  done
+}
+
+case "${1:-}" in
+  config) show_config ;;
+  check)  mailbox_is_live ;;
+  send)   mailbox_is_live && send_message "${@:2}" ;;
+  inbox)  mailbox_is_live && list_mail ;;
+  ack)    mailbox_is_live && acknowledge "${@:2}" ;;
+  watch)  mailbox_is_live >/dev/null && watch_inbox ;;
+  *)
+    echo "usage: agent-mail {config|check|send <recipient> <slug> < body.md|inbox|ack <file>|watch}" >&2
+    exit 1 ;;
+esac
