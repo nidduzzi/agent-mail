@@ -23,13 +23,18 @@ flowchart LR
     planner["🤖 planner<br/>Claude Code"]
     builder["🤖 builder<br/>Codex"]
   end
-  subgraph B["🖥️ machine B"]
+  subgraph B["🖥️ machine B, same LAN"]
     reviewer["🤖 reviewer"]
+  end
+  subgraph C["📓 notebook container"]
+    analyst["🤖 analyst"]
   end
   planner -- "send @team" --> boxA[("📁 ~/agent-mail")]
   builder -- "inbox · ack" --> boxA
-  boxA <-. "Syncthing, LAN only" .-> boxB[("📁 ~/agent-mail")]
+  boxA <-. "Syncthing, LAN" .-> boxB[("📁 ~/agent-mail")]
+  boxC[("📁 ~/agent-mail")] <-. "Syncthing, dialed from the container:<br/>LAN, tailnet or relay" .-> boxA
   reviewer -- "watch" --> boxB
+  analyst -- "send" --> boxC
 ```
 
 ## ✨ Highlights
@@ -143,6 +148,34 @@ agent-mail sync share <their-id> --address tcp://192.168.1.20:22000 --yes    # �
 
 Set `AGENT_MAIL_SYNC_CHECK` to a command that succeeds only while the sync runs, for example `pgrep -x unison`. `check` runs it every time; `watch` runs it every `AGENT_MAIL_SYNC_CHECK_SECONDS` (60 by default).
 </details>
+
+## 🌐 Containers and the internet
+
+**Only one side has to be reachable.** A Syncthing connection works whichever side opens it, so a peer that can only dial out, like a notebook or CI container, needs no address of its own:
+
+```sh
+# on the reachable machine: the container's ID, no address
+agent-mail sync share <container-id> --address dynamic
+# in the container: the machine's ID and an address the container can reach
+agent-mail sync share <machine-id> --address tcp://<machine-ip>:22000
+```
+
+The firewall on the reachable machine must let the container's traffic in. That traffic often arrives from the container host's address or a pod network, not from the container itself, so allow that range on TCP 22000. Syncthing in a container also lives only as long as the container: start it again after a restart.
+
+**Across the internet, keep the LAN setup on a private network.** Put both machines on a WireGuard or Tailscale network, share with the peer's address there, and accept port 22000 only on that interface (`sudo ufw allow in on tailscale0 to any port 22000 proto tcp`). Nothing is opened to the internet, and relays and global discovery stay off. A container that cannot create a network interface can run `tailscaled --tun=userspace-networking` and reach the peer through its SOCKS5 proxy (`all_proxy=socks5://localhost:1055`), or the folder can sync on the container's host and be mounted in.
+
+**Or use Syncthing's own internet mode.** Share with `--address dynamic` on both sides and turn on global discovery, relays and NAT traversal. Traffic stays encrypted between the two device IDs, but the public discovery and relay servers see both IP addresses, relayed traffic is slower, and `doctor` warns that traffic can leave the LAN. Self-hosted `stdiscosrv` and `strelaysrv` keep that metadata with you.
+
+| Tool | Over the internet |
+|---|---|
+| Syncthing | ✅ best fit: two-way, continuous, end-to-end encrypted |
+| Unison over ssh | ✅ two-way, run it on a timer |
+| sshfs or NFS over a VPN | ✅ one shared folder, nothing to sync; breaks while the link is down |
+| rclone bisync | ⚠️ the storage provider reads the mail unless you add `crypt` |
+| git push and pull | ⚠️ slow, and every message stays in the history |
+| croc | ❌ sends one file per code; good for handing over a file, not for a mailbox |
+
+Whatever carries the folder, set `AGENT_MAIL_SYNC_CHECK` to a command that fails when the link is down, such as `tailscale ping -c 1 <peer>`, so the mailbox answers `DEAD:` instead of waiting for mail that cannot arrive. The deadline, the no-secrets rule and "mail is never approval" hold on the internet exactly as on a LAN.
 
 ## 🗂️ How it works
 

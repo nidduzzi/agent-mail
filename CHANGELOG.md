@@ -9,6 +9,7 @@ All notable changes to agent-mail. The format follows [Keep a Changelog](https:/
 - A nightly workflow fuzzes every target for 55 minutes in parallel, keeping the generated corpus in the Actions cache between nights.
 - `tests/fuzz.sh` fuzzes only the targets named on its command line.
 - This changelog; the release workflow publishes each version's section as its release notes.
+- The README explains syncing with a container that can only dial out, and across the internet over a private network or Syncthing's relays; the diagram shows a container peer.
 
 ## [0.4.1] - 2026-10-05
 
