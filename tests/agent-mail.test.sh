@@ -239,6 +239,7 @@ test_syncthing_sharing() {
   fresh_syncthing
   expect "sync id prints this device's ID" 0 "$this_device" with_syncthing as alpha sync id
   expect "doctor flags an unshared mailbox" 1 "does not share" with_syncthing as alpha doctor
+  expect "doctor ignores an unrelated Syncthing behind a custom sync check" 0 "sync check passes: true" with_syncthing env AGENT_MAIL_SYNC_CHECK=true AGENT_MAIL_CONFIG=/dev/null AGENT_MAIL_DIR="$mailbox" AGENT_MAIL_SELF=alpha "$agent_mail" doctor
   expect "share without --yes only prints the plan" 0 "will share folder 'agent-mail' with $peer_device" with_syncthing as alpha sync share "$peer_device" --address tcp://192.0.2.7:22000
   [ ! -e "$syncthing_state/shared" ] && [ ! -e "$mailbox/.stignore" ] && passed=$(( passed + 1 )) && echo "ok   a plan without --yes changes nothing" \
     || { failed=$(( failed + 1 )); echo "FAIL a plan without --yes changes nothing"; }
@@ -255,6 +256,10 @@ test_syncthing_sharing() {
   expect "share refuses a malformed address" 1 "--address is" with_syncthing as alpha sync share "$peer_device" --address "192.0.2.7; rm -rf /"
   echo true > "$syncthing_state/option-relays-enabled"
   expect "doctor warns when traffic can leave the LAN" 0 "may reach beyond the LAN: relays" with_syncthing as alpha doctor
+  expect "doctor inspects Syncthing behind a custom sync check" 0 "may reach beyond the LAN: relays" with_syncthing env AGENT_MAIL_SYNC_CHECK=true AGENT_MAIL_CONFIG=/dev/null AGENT_MAIL_DIR="$mailbox" AGENT_MAIL_SELF=alpha "$agent_mail" doctor
+  touch "$syncthing_state/stopped"
+  expect_absent "doctor leaves a stopped Syncthing alone behind a custom sync check" "start it" with_syncthing env AGENT_MAIL_SYNC_CHECK=true AGENT_MAIL_CONFIG=/dev/null AGENT_MAIL_DIR="$mailbox" AGENT_MAIL_SELF=alpha "$agent_mail" doctor
+  rm "$syncthing_state/stopped"
 
   fresh_mailbox
   fresh_syncthing

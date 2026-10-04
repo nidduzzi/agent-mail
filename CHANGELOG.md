@@ -11,6 +11,10 @@ All notable changes to agent-mail. The format follows [Keep a Changelog](https:/
 - This changelog; the release workflow publishes each version's section as its release notes.
 - The README explains syncing with a container that can only dial out, and across the internet over a private network or Syncthing's relays; the diagram shows a container peer.
 
+### Fixed
+
+- `doctor` inspects Syncthing whenever it serves the mailbox, also behind a custom `AGENT_MAIL_SYNC_CHECK`, so it warns when relays or global discovery are on. An installed Syncthing that doesn't serve the mailbox is left out of a custom-check diagnosis.
+
 ## [0.4.1] - 2026-10-05
 
 ### Fixed

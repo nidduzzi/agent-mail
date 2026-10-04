@@ -116,25 +116,27 @@ func (a agent) diagnoseMailbox(d *diagnosis) (deadline time.Time, hasDeadline bo
 
 func (a agent) diagnoseSync(d *diagnosis, deadline time.Time, hasDeadline bool) {
 	s, found := findSyncthing(a.cfg)
+	customCheck := a.cfg.syncCheck != "" && a.cfg.syncCheck != "syncthing"
 	switch {
+	case customCheck && shellSucceeds(a.cfg.syncCheck):
+		d.note(healthy, "sync check passes: "+a.cfg.syncCheck)
+	case customCheck:
+		d.note(problem, "sync check fails: "+a.cfg.syncCheck, "start the sync tool, or fix AGENT_MAIL_SYNC_CHECK")
 	case a.cfg.syncCheck == "" && !found:
 		d.note(warning, "no sync check and no Syncthing: fine when every agent runs on this machine",
 			append([]string{"to mail agents on other machines, sync " + a.box.dir + " between them:"}, installSyncthingSteps()...)...)
-		return
-	case a.cfg.syncCheck != "" && a.cfg.syncCheck != "syncthing":
-		if shellSucceeds(a.cfg.syncCheck) {
-			d.note(healthy, "sync check passes: "+a.cfg.syncCheck)
-		} else {
-			d.note(problem, "sync check fails: "+a.cfg.syncCheck, "start the sync tool, or fix AGENT_MAIL_SYNC_CHECK")
-		}
-		return
 	case !found:
 		d.note(problem, "AGENT_MAIL_SYNC_CHECK is 'syncthing' but no syncthing program was found", installSyncthingSteps()...)
+	}
+	if !found {
+		return
+	}
+	state, err := s.state(a.box.dir)
+	if customCheck && (err != nil || !state.servesMailbox(a.box.dir)) {
 		return
 	}
 
 	d.note(healthy, "Syncthing found: "+s.program)
-	state, err := s.state(a.box.dir)
 	if err != nil {
 		d.note(problem, err.Error(), startSyncthingSteps(s, a.now(), deadline, hasDeadline)...)
 		return
