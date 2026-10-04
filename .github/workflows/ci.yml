@@ -11,6 +11,8 @@ permissions:
 
 env:
   GO_VERSION: "1.27.1"
+  GOEXPERIMENT: nosizespecializedmalloc
+  CGO_ENABLED: "0"
 
 jobs:
   test:
@@ -39,6 +41,8 @@ jobs:
         run: test -z "$(gofmt -l .)"
       - name: vet
         run: go vet ./...
+      - name: unit tests
+        run: go test ./...
       - name: build
         run: go build -trimpath -o "agent-mail$(go env GOEXE)" .
       - name: behaviour tests

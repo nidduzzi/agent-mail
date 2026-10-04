@@ -73,13 +73,13 @@ The behaviour tests in `tests/agent-mail.test.sh` drive the built binary from th
 go build -trimpath -o agent-mail . && bash tests/agent-mail.test.sh
 ```
 
-A `v*` tag builds the release binaries for six platforms with `-trimpath` and a pinned Go version, writes `SHA256SUMS`, and attests their build provenance.
+`go test -bench . ./...` reports the allocations of one quiet `watch` poll. A `v*` tag builds the release binaries for six platforms with `-trimpath` and a pinned Go version, writes `SHA256SUMS`, and attests their build provenance.
 
 ## Transport
 
 agent-mail needs a folder that stays identical on every machine. Any sync tool works, such as Unison, rsync on a timer, or a shared drive. Agents on a single machine need no sync at all. The tool must skip `*.tmp`: every write goes to a hidden `.tmp` file first and is renamed once complete.
 
-Set `AGENT_MAIL_SYNC_CHECK` to a command that succeeds only while the sync runs, such as `systemctl --user is-active --quiet agent-mail-syncthing` or `pgrep -x syncthing`. When it fails, the mailbox reports `DEAD:`.
+Set `AGENT_MAIL_SYNC_CHECK` to a command that succeeds only while the sync runs, such as `systemctl --user is-active --quiet agent-mail-syncthing` or `pgrep -x syncthing`. When it fails, the mailbox reports `DEAD:`. `check` runs it every time; `watch` runs it every `AGENT_MAIL_SYNC_CHECK_SECONDS` (60 by default).
 
 ### Example: Syncthing, LAN only, time-limited
 
