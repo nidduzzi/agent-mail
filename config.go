@@ -34,17 +34,11 @@ var configKeys = map[string]bool{
 }
 
 func loadConfig(getenv func(string) string) (config, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return config{}, errors.New("no home directory: " + err.Error())
-	}
 	file := getenv("AGENT_MAIL_CONFIG")
 	if file == "" {
-		configDir, err := os.UserConfigDir()
-		if err != nil {
-			return config{}, errors.New("no config directory: " + err.Error())
+		if configDir, err := os.UserConfigDir(); err == nil {
+			file = filepath.Join(configDir, "agent-mail", "config")
 		}
-		file = filepath.Join(configDir, "agent-mail", "config")
 	}
 	fromFile, err := readConfigFile(file)
 	if err != nil {
@@ -58,6 +52,17 @@ func loadConfig(getenv func(string) string) (config, error) {
 			return v
 		}
 		return fallback
+	}
+	home, _ := os.UserHomeDir()
+	path := func(key, fallback string) (string, error) {
+		p := value(key, fallback)
+		if p != "~" && !strings.HasPrefix(p, "~/") {
+			return p, nil
+		}
+		if home == "" {
+			return "", errors.New(key + " starts with ~ but the home directory is unknown; give an absolute path")
+		}
+		return filepath.Join(home, p[1:]), nil
 	}
 	duration := func(key, fallback string, minimum int, unit time.Duration) (time.Duration, error) {
 		n, err := strconv.Atoi(value(key, fallback))
@@ -78,9 +83,20 @@ func loadConfig(getenv func(string) string) (config, error) {
 	if err != nil {
 		return config{}, err
 	}
-	dir := expandHome(value("AGENT_MAIL_DIR", filepath.Join(home, "agent-mail")), home)
+	dir, err := path("AGENT_MAIL_DIR", "~/agent-mail")
+	if err != nil {
+		return config{}, err
+	}
 	if !filepath.IsAbs(dir) {
 		return config{}, errors.New("AGENT_MAIL_DIR must be an absolute path, so every agent finds the same mailbox: " + dir)
+	}
+	syncthingProgram, err := path("AGENT_MAIL_SYNCTHING", "")
+	if err != nil {
+		return config{}, err
+	}
+	syncthingHome, err := path("AGENT_MAIL_SYNCTHING_HOME", "")
+	if err != nil {
+		return config{}, err
 	}
 	return config{
 		file:              file,
@@ -88,8 +104,8 @@ func loadConfig(getenv func(string) string) (config, error) {
 		dir:               dir,
 		syncCheck:         value("AGENT_MAIL_SYNC_CHECK", ""),
 		syncCheckInterval: syncEvery,
-		syncthingProgram:  expandHome(value("AGENT_MAIL_SYNCTHING", ""), home),
-		syncthingHome:     expandHome(value("AGENT_MAIL_SYNCTHING_HOME", ""), home),
+		syncthingProgram:  syncthingProgram,
+		syncthingHome:     syncthingHome,
 		pollInterval:      poll,
 		staleAfter:        staleAfter,
 	}, nil
@@ -97,6 +113,9 @@ func loadConfig(getenv func(string) string) (config, error) {
 
 func readConfigFile(path string) (map[string]string, error) {
 	values := make(map[string]string, len(configKeys))
+	if path == "" {
+		return values, nil
+	}
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return values, nil
@@ -119,16 +138,9 @@ func readConfigFile(path string) (map[string]string, error) {
 	return values, nil
 }
 
-func expandHome(path, home string) string {
-	if path == "~" || strings.HasPrefix(path, "~/") {
-		return filepath.Join(home, strings.TrimPrefix(path, "~"))
-	}
-	return path
-}
-
 func (c config) print(o *output) {
 	settings := [...][2]string{
-		{"AGENT_MAIL_CONFIG", c.file},
+		{"AGENT_MAIL_CONFIG", orExplain(c.file, "none: no config directory here")},
 		{"AGENT_MAIL_SELF", orExplain(c.self, "unset: the name of this agent in the mailbox")},
 		{"AGENT_MAIL_DIR", c.dir},
 		{"AGENT_MAIL_SYNC_CHECK", orExplain(c.syncCheck, "none: 'syncthing', or a command that must succeed while the sync runs")},

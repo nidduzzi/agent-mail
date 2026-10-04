@@ -145,7 +145,7 @@ func (a agent) resolveRecipients(addressed string) ([]string, error) {
 		}
 		for _, name := range names {
 			switch {
-			case !validName(name) || !isDir(a.box.inbox(name)):
+			case !validName(name) || !isFile(a.box.memberFile(name)):
 				unknown = append(unknown, printable(name))
 			case name == a.cfg.self || slices.Contains(resolved, name):
 			default:

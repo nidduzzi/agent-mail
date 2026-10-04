@@ -55,10 +55,11 @@ func (a agent) doctor() error {
 		}
 	}
 	problems, warnings := d.count(problem), d.count(warning)
-	a.out.add("doctor: ").num(int64(problems)).add(" problems, ").num(int64(warnings)).add(" warnings; nothing was changed").end()
+	summary := "doctor: " + strconv.Itoa(problems) + " problems, " + strconv.Itoa(warnings) + " warnings; nothing was changed"
 	if problems > 0 {
-		return errors.New("doctor found " + strconv.Itoa(problems) + " problems")
+		return errors.New(summary)
 	}
+	a.out.add(summary).end()
 	return nil
 }
 

@@ -68,6 +68,7 @@ test_joining_and_names() {
   expect "who lists every member" 0 "gamma" as alpha who
   expect "a fresh name cannot be taken twice" 1 "is taken" as delta join alpha
   expect "a stale name can be taken over" 0 "taking over" env AGENT_MAIL_STALE_MINUTES=0 AGENT_MAIL_CONFIG=/dev/null AGENT_MAIL_DIR="$mailbox" "$agent_mail" join alpha
+  expect "an agent can rejoin its own fresh name" 0 "joined as 'alpha'" as alpha join alpha lead
   expect "names are validated" 1 "lowercase" as x join "Bad Name"
   expect "commands need a joined identity" 1 "is not a member" as delta inbox
 }
@@ -228,6 +229,8 @@ test_doctor_explains_what_is_missing() {
   expect "doctor accepts a local mailbox with warnings only" 0 "warning  no sync check and no Syncthing" env AGENT_MAIL_CONFIG=/dev/null AGENT_MAIL_DIR="$mailbox" AGENT_MAIL_SELF=alpha AGENT_MAIL_SYNCTHING=/nonexistent "$agent_mail" doctor
   expect "doctor says how to install Syncthing" 0 "install Syncthing" env AGENT_MAIL_CONFIG=/dev/null AGENT_MAIL_DIR="$mailbox" AGENT_MAIL_SELF=alpha AGENT_MAIL_SYNCTHING=/nonexistent "$agent_mail" doctor
   expect "doctor flags an agent without identity" 1 "this agent has no identity" env AGENT_MAIL_CONFIG=/dev/null AGENT_MAIL_DIR="$mailbox" AGENT_MAIL_SYNCTHING=/nonexistent "$agent_mail" doctor
+  expect "doctor with problems prints its summary once" 1 "^doctor: 1 problems" env AGENT_MAIL_CONFIG=/dev/null AGENT_MAIL_DIR="$mailbox" AGENT_MAIL_SYNCTHING=/nonexistent "$agent_mail" doctor
+  expect_absent "doctor with problems has no second summary" "doctor found" env AGENT_MAIL_CONFIG=/dev/null AGENT_MAIL_DIR="$mailbox" AGENT_MAIL_SYNCTHING=/nonexistent "$agent_mail" doctor
   expect "doctor changes nothing" 0 "nothing was changed" env AGENT_MAIL_CONFIG=/dev/null AGENT_MAIL_DIR="$mailbox" AGENT_MAIL_SELF=alpha AGENT_MAIL_SYNCTHING=/nonexistent "$agent_mail" doctor
 }
 
@@ -263,8 +266,17 @@ test_syncthing_sharing() {
 
 test_leaving() {
   fresh_mailbox
+  as alpha list set all alpha beta gamma >/dev/null 2>&1
   expect "leave drops the membership" 0 "left" as gamma leave
   expect_absent "who no longer lists the member" "gamma" as alpha who
+  expect "mail to a member who left is refused" 1 "unknown recipients: gamma" as alpha send gamma hi <<<"hi"
+  expect "a list naming a member who left is refused" 1 "unknown recipients: gamma" as alpha send @all hi <<<"hi"
+}
+
+test_configuration_without_a_home() {
+  fresh_mailbox
+  expect "settings from the environment need no home directory" 0 "time left\|DEADLINE: none" env -u HOME -u XDG_CONFIG_HOME -u AGENT_MAIL_CONFIG -u APPDATA -u USERPROFILE AGENT_MAIL_DIR="$mailbox" AGENT_MAIL_SELF=alpha "$agent_mail" check
+  expect "a ~ path without a home directory is refused" 1 "home directory is unknown" env -u HOME -u XDG_CONFIG_HOME -u AGENT_MAIL_CONFIG -u APPDATA -u USERPROFILE -u AGENT_MAIL_DIR "$agent_mail" check
 }
 
 for test_case in $(declare -F | awk '{print $3}' | grep '^test_'); do

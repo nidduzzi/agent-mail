@@ -71,10 +71,14 @@ func (a agent) join(args []string) error {
 	}
 	if existing, err := readMember(a.box, joining.name); err == nil {
 		idle := a.now().Sub(existing.seen)
-		if idle < a.cfg.staleAfter {
+		rejoining := a.cfg.self == joining.name
+		switch {
+		case rejoining:
+		case idle < a.cfg.staleAfter:
 			return errors.New("'" + joining.name + "' is taken: seen " + strconv.Itoa(int(idle.Minutes())) + " min ago on " + printable(existing.host))
+		default:
+			a.out.add("taking over '", joining.name, "', idle for ").num(int64(idle.Minutes())).add(" min").end()
 		}
-		a.out.add("taking over '", joining.name, "', idle for ").num(int64(idle.Minutes())).add(" min").end()
 		joining.joined = existing.joined
 	}
 	if err := os.MkdirAll(a.box.readDir(joining.name), 0o755); err != nil {
