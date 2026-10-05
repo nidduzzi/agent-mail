@@ -83,5 +83,40 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: false
-      - name: mutation testing, at least 90% of covered mutants killed
-        run: MIN_EFFICACY=90 bash tests/mutation.sh
+      - name: mutation testing, at least 93% of covered mutants killed
+        run: MIN_EFFICACY=93 bash tests/mutation.sh
+
+  syncthing:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SYNCTHING_VERSION: v2.1.5
+      SYNCTHING_TARBALL_SHA256: 3d222b609f7ab2944e02748cb10488b4160d446b49e0eafc107ef2a525ab3486
+      SYNCTHING_TAG_COMMIT: 2ca95cf1498104113fdfde46df4107f2450a0f71
+    steps:
+      - name: checkout (actions/checkout v7.0.1)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: set up go (actions/setup-go v7.0.0)
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - name: Syncthing release, checked against its pinned hash
+        run: |
+          tarball="syncthing-linux-amd64-$SYNCTHING_VERSION.tar.gz"
+          curl -fsSLO "https://github.com/syncthing/syncthing/releases/download/$SYNCTHING_VERSION/$tarball"
+          echo "$SYNCTHING_TARBALL_SHA256  $tarball" | sha256sum -c -
+          tar -xzf "$tarball"
+          echo "SYNCTHING=$PWD/syncthing-linux-amd64-$SYNCTHING_VERSION/syncthing" >> "$GITHUB_ENV"
+      - name: private relay server, built from the pinned Syncthing tag
+        run: |
+          git clone -q --depth 1 --branch "$SYNCTHING_VERSION" https://github.com/syncthing/syncthing.git "$RUNNER_TEMP/syncthing-src"
+          test "$(git -C "$RUNNER_TEMP/syncthing-src" rev-parse HEAD)" = "$SYNCTHING_TAG_COMMIT"
+          (cd "$RUNNER_TEMP/syncthing-src" && go build -trimpath -o "$RUNNER_TEMP/strelaysrv" ./cmd/strelaysrv)
+          echo "STRELAYSRV=$RUNNER_TEMP/strelaysrv" >> "$GITHUB_ENV"
+      - name: build
+        run: go build -trimpath -o agent-mail .
+      - name: two Syncthing devices through a private relay, no public servers
+        run: bash tests/syncthing-e2e.sh
