@@ -115,7 +115,7 @@ func (a agent) diagnoseMailbox(d *diagnosis) (deadline time.Time, hasDeadline bo
 }
 
 func (a agent) diagnoseSync(d *diagnosis, deadline time.Time, hasDeadline bool) {
-	s, found := findSyncthing(a.cfg)
+	s, found := findSyncthing(a.cfg, a.execute)
 	customCheck := a.cfg.syncCheck != "" && a.cfg.syncCheck != "syncthing"
 	switch {
 	case customCheck && shellSucceeds(a.cfg.syncCheck):
@@ -146,8 +146,10 @@ func (a agent) diagnoseSync(d *diagnosis, deadline time.Time, hasDeadline bool) 
 	} else {
 		d.note(problem, "Syncthing does not share "+a.box.dir+" with any peer yet",
 			"on the other machine run: agent-mail sync id",
-			"then here: agent-mail sync share <their-id> --address tcp://<their-lan-ip>:22000 (prints the plan; add --yes to apply)",
-			"and the same on their side with this ID: "+state.self)
+			"then here: agent-mail sync share <their-id> --address tcp://<their-ip>:22000 (prints the plan; add --yes to apply)",
+			"and the same on their side with this ID: "+state.self+" and an address of this machine they can reach",
+			"a peer that can only dial out, like a container, gets --address dynamic here and this machine's address on its side",
+			"across the internet: https://github.com/nidduzzi/agent-mail#-containers-and-the-internet")
 	}
 	if !state.ignoresTemp {
 		d.note(problem, "the mailbox .stignore does not skip *.tmp, so half-written messages could sync",
@@ -157,20 +159,45 @@ func (a agent) diagnoseSync(d *diagnosis, deadline time.Time, hasDeadline bool) 
 		d.note(warning, "AGENT_MAIL_SYNC_CHECK is unset, so a stopped Syncthing goes unnoticed",
 			"set AGENT_MAIL_SYNC_CHECK=syncthing in the agent-mail config")
 	}
+	reach := s.reachability(state.sharedWith)
 	var leaks []string
-	for _, option := range [...][2]string{
-		{"global-ann-enabled", "global discovery"},
-		{"local-ann-enabled", "local discovery"},
-		{"relays-enabled", "relays"},
-		{"natenabled", "NAT traversal"},
+	for _, option := range [...]struct {
+		enabled bool
+		name    string
+	}{
+		{reach.globalDiscovery, "global discovery"},
+		{reach.localDiscovery, "local discovery"},
+		{reach.relays, "relays"},
+		{reach.nat, "NAT traversal"},
 	} {
-		if value, ok := s.run("cli", "config", "options", option[0], "get"); ok && strings.TrimSpace(value) == "true" {
-			leaks = append(leaks, option[1])
+		if option.enabled {
+			leaks = append(leaks, option.name)
 		}
 	}
 	if len(leaks) > 0 {
 		d.note(warning, "Syncthing may reach beyond the LAN: "+strings.Join(leaks, ", ")+" enabled",
 			"for a LAN-only mailbox turn them off in the Syncthing settings, and give peers explicit tcp:// addresses")
+	}
+	if reach.relays && !reach.listensOnRelay() {
+		d.note(problem, "relays are on, but Syncthing listens on no relay ("+printable(strings.Join(reach.listen, " "))+"), so a peer that can only dial out cannot reach this device",
+			"syncthing cli config options raw-listen-addresses 0 set default")
+	}
+	for _, p := range reach.peers {
+		if p.onlyDynamic() && !reach.globalDiscovery && !reach.localDiscovery {
+			d.note(warning, "peer "+p.id+" has only a dynamic address and discovery is off, so this device cannot find it; it works only when the peer connects first",
+				"give its address: agent-mail sync share "+p.id+" --address tcp://<its-ip>:22000",
+				"or, across the internet, turn on global discovery and relays on both sides")
+		}
+	}
+	for _, p := range reach.peers {
+		if p.link.connected {
+			d.note(healthy, "peer "+p.id+" "+p.link.describe())
+		}
+	}
+	if len(reach.peers) > 0 && reach.connectedPeers() == 0 {
+		d.note(warning, "no peer is connected yet",
+			"agent-mail sync status shows each peer's link and addresses",
+			"check that the peer shares the folder with this device's ID, that one side can reach the other's address, and the firewall in between")
 	}
 	d.note(warning, "agent-mail cannot see the firewall; peers need TCP 22000 from the LAN only", firewallStep())
 }

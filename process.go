@@ -30,6 +30,8 @@ func findProgram(name string) (string, bool) {
 	return "", false
 }
 
+type programRunner func(program string, args []string) (output string, succeeded bool)
+
 func runProgram(program string, args []string) (output string, succeeded bool) {
 	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
 	if err != nil {

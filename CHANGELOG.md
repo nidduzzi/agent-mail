@@ -4,16 +4,30 @@ All notable changes to agent-mail. The format follows [Keep a Changelog](https:/
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-05
+
 ### Added
 
-- A nightly workflow fuzzes every target for 55 minutes in parallel, keeping the generated corpus in the Actions cache between nights.
-- `tests/fuzz.sh` fuzzes only the targets named on its command line.
-- This changelog; the release workflow publishes each version's section as its release notes.
+- `sync status` shows each peer's link (connected via a relay, connected directly, or not connected), its name and addresses, and this device's listen addresses, discovery, relays and NAT traversal.
+- `doctor` reports each connected peer, warns while no peer is connected, flags relays that are on while Syncthing listens on no relay, and warns about a peer with only a dynamic address while discovery is off.
+- `doctor`'s sharing advice covers a peer that can only dial out, like a container, and points to the README for syncing across the internet.
+- `sync share --address` accepts a relay address, `relay://<host>:<port>/?id=<relay-id>`, for a private relay.
+- An end-to-end test runs two real Syncthing devices and a private `strelaysrv` with every public Syncthing server turned off: sharing, mail both ways, acks, the built-in sync check, `doctor`, losing the relay and reconnecting.
+- Stateful fuzz targets for Syncthing sharing and for `watch`, and differential fuzzing of secret detection, peer addresses, device IDs and the JSON reader; every edge case is a named pinned sequence. One-off unit tests are gone.
 - The README explains syncing with a container that can only dial out, and across the internet over a private network or Syncthing's relays; the diagram shows a container peer.
+- A nightly workflow fuzzes every target for 55 minutes in parallel, keeping the generated corpus in the Actions cache between nights. `tests/fuzz.sh` fuzzes only the targets named on its command line.
+- This changelog; the release workflow publishes each version's section as its release notes.
+
+### Changed
+
+- `sync share` with a different `--address` replaces a known peer's addresses, through the Syncthing CLI. Before, it reported nothing to do. Without `--address`, a known peer keeps its addresses.
 
 ### Fixed
 
 - `doctor` inspects Syncthing whenever it serves the mailbox, also behind a custom `AGENT_MAIL_SYNC_CHECK`, so it warns when relays or global discovery are on. An installed Syncthing that doesn't serve the mailbox is left out of a custom-check diagnosis.
+- Mutation testing caps test memory at 2 GiB, so a mutant that allocates without end no longer takes down the CI runner.
+- Secret detection counts the characters of a value, not its bytes, so a five-character value with a multi-byte character no longer counts as six.
+- `watch` started without its inbox answers `DEAD: the inbox … is gone`, as it does when the inbox disappears while watching.
 
 ## [0.4.1] - 2026-10-05
 
@@ -75,7 +89,8 @@ All notable changes to agent-mail. The format follows [Keep a Changelog](https:/
 
 - LF line endings on every checkout, so Windows can run the tests.
 
-[Unreleased]: https://github.com/nidduzzi/agent-mail/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/nidduzzi/agent-mail/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/nidduzzi/agent-mail/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/nidduzzi/agent-mail/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/nidduzzi/agent-mail/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/nidduzzi/agent-mail/compare/v0.3.0...v0.3.1

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -48,9 +49,11 @@ func FuzzPrintable(f *testing.F) {
 }
 
 var (
-	nameSpec      = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
-	messageIDSpec = regexp.MustCompile(`^[A-Za-z0-9-]{1,200}$`)
-	lineSpec      = regexp.MustCompile(`^[^\x00-\x1f\x7f]{0,200}$`)
+	nameSpec        = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
+	messageIDSpec   = regexp.MustCompile(`^[A-Za-z0-9-]{1,200}$`)
+	peerAddressSpec = regexp.MustCompile(`^(dynamic|tcp://[^ /\\\x00-\x1f\x7f]+|relay://[^ /\\\x00-\x1f\x7f]+/\?([^ \\\x00-\x1f\x7f]*&)??id=([A-Z2-7]{7}-){7}[A-Z2-7]{7}(&[^ \\\x00-\x1f\x7f]*)?)$`)
+	deviceIDSpec    = regexp.MustCompile(`^([A-Z2-7]{7}-){7}[A-Z2-7]{7}$`)
+	lineSpec        = regexp.MustCompile(`^[^\x00-\x1f\x7f]{0,200}$`)
 )
 
 func FuzzValidators(f *testing.F) {
@@ -59,6 +62,22 @@ func FuzzValidators(f *testing.F) {
 		strings.Repeat("a", 64), strings.Repeat("a", 65),
 		strings.Repeat("A", 200), strings.Repeat("A", 201),
 		strings.Repeat("r", 199) + "\x7f", "role\twith tab",
+		"SHKHN6V-FMTGPTV-N7BIHWV-KHFC3KS-C7U5FEB-SOP77BS-2CLXXNA-MLKHQQI",
+		"AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-2345672",
+		"AAAAAA1-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-2345672",
+		"AAAAAA8-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-2345672",
+		"ZZZZZZZ-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-2345677",
+		"aaaaaaa-bbbbbbb-ccccccc-ddddddd-eeeeeee-fffffff-ggggggg-2345672",
+		"AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG",
+		"AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-234567",
+		"AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-2345672-AAAAAAA",
+		"AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-@345672",
+		"dynamic", "dynamic ", "tcp://", "tcp://192.0.2.7:22000", "tcp://[2001:db8::1]:22000", "tcp://a/b", "tcp://a b", "tcp://a\\b", "udp://192.0.2.7:22000",
+		"relay://127.0.0.1:22067/?id=2QLRZGJ-EK4Y72N-EWGIZS6-DDFOUEP-AYXXUNI-B4NQAVW-ORMVMBZ-AE4K4AR&networkTimeout=2m0s&pingInterval=1m0s",
+		"relay://127.0.0.1:22067/?networkTimeout=2m0s&id=2QLRZGJ-EK4Y72N-EWGIZS6-DDFOUEP-AYXXUNI-B4NQAVW-ORMVMBZ-AE4K4AR",
+		"relay://127.0.0.1:22067/?id=not-an-id", "relay://127.0.0.1:22067/?token=x", "relay://127.0.0.1:22067", "relay:///?id=2QLRZGJ-EK4Y72N-EWGIZS6-DDFOUEP-AYXXUNI-B4NQAVW-ORMVMBZ-AE4K4AR",
+		"relay://a/b/?id=2QLRZGJ-EK4Y72N-EWGIZS6-DDFOUEP-AYXXUNI-B4NQAVW-ORMVMBZ-AE4K4AR",
+		"relay://h:1/?id=2QLRZGJ-EK4Y72N-EWGIZS6-DDFOUEP-AYXXUNI-B4NQAVW-ORMVMBZ-AE4K4AR&id=bad",
 	} {
 		f.Add(text)
 	}
@@ -69,8 +88,114 @@ func FuzzValidators(f *testing.F) {
 		if got, want := validMessageID(text), messageIDSpec.MatchString(text); got != want {
 			t.Fatalf("validMessageID(%q) = %v, want %v", text, got, want)
 		}
+		firstID := ""
+		if _, query, found := strings.Cut(text, "/?"); found {
+			for _, parameter := range strings.Split(query, "&") {
+				if id, isID := strings.CutPrefix(parameter, "id="); isID {
+					firstID = id
+					break
+				}
+			}
+		}
+		wantAddress := peerAddressSpec.MatchString(text) && len(text) <= 200 && (!strings.HasPrefix(text, "relay://") || deviceIDSpec.MatchString(firstID))
+		if got := validPeerAddress(text); got != wantAddress {
+			t.Fatalf("validPeerAddress(%q) = %v, want %v", text, got, wantAddress)
+		}
+		if got, want := validDeviceID(text), deviceIDSpec.MatchString(text); got != want {
+			t.Fatalf("validDeviceID(%q) = %v, want %v", text, got, want)
+		}
 		if got, want := validLine(text), len(text) <= 200 && lineSpec.MatchString(text); got != want {
 			t.Fatalf("validLine(%q) = %v, want %v", text, got, want)
+		}
+	})
+}
+
+func FuzzJSONObjectMembers(f *testing.F) {
+	for _, text := range []string{
+		"{}",
+		" { } ",
+		`{"connections": {"ID": {"address": "138.2.66.216:22067", "connected": true, "primary": {"type": "relay-server"}, "type": "relay-server"}}, "total": {}}`,
+		`{"a": "x\\"y", "b": [1, {"c": "]"}], "d": null, "e": -1.5e3}`,
+		`{"a": 1, "a": 2}`,
+		`{"a" : "}" , "b":"{"}`,
+		`{"connected": tru`,
+		`{"`,
+		`{"a`,
+		`{"a":`,
+		`{"a":"`,
+		`{"a":"\`,
+		`{"a":1`,
+		`{"a":{"b":[`,
+		`{"a":-}`,
+		`{"\b":""}`,
+		"{\"\xb1\":0}",
+		`[1, 2]`,
+		`{"a": 1,}`,
+		"",
+	} {
+		f.Add(text)
+	}
+	f.Fuzz(func(t *testing.T, text string) {
+		members, ok := jsonObjectMembersRaw(text)
+		var reference map[string]json.RawMessage
+		if !utf8.ValidString(text) || strings.Contains(text, "\\") || json.Unmarshal([]byte(text), &reference) != nil || reference == nil {
+			return
+		}
+		if !ok {
+			t.Fatalf("rejected valid JSON object %q", text)
+		}
+		if len(members) != len(reference) {
+			t.Fatalf("%q has %d members, want %d", text, len(members), len(reference))
+		}
+		for key, raw := range reference {
+			want := string(bytes.TrimSpace(raw))
+			if want[0] == '"' {
+				want = want[1 : len(want)-1]
+			}
+			if got, present := members[key]; !present || got != want {
+				t.Fatalf("%q: member %q is %q, want %q", text, key, got, want)
+			}
+		}
+	})
+}
+
+var secretSpec = regexp.MustCompile(`(password|passwd|secret|token|api(key|_key|-key)|private(key|_key|-key))[ \t\r\n]*[=:][ \t\r\n]*[^ \t\r\n<]{6}`)
+
+func FuzzLooksLikeSecret(f *testing.F) {
+	for _, body := range []string{
+		"token: abcdef",
+		"token: abcde",
+		"password=hunter22",
+		"API_KEY = 0123456789",
+		"Token :\n  abcdef123",
+		"the token is short-lived",
+		"secret: <redacted>",
+		"token, then token: abcdef",
+		"tokentoken: abcdef",
+		"-----BEGIN RSA PRIVATE KEY-----",
+		"BEGIN with PRIVATE KEY far apart",
+		"PRIVATE KEY then BEGIN ",
+		"a PRIVATE KEY is never mailed",
+		"passwd:",
+		"private-key: abc def",
+		"privatekey:abcdef<",
+		"token:000Ɍ0",
+		"token:000ɌɌ0",
+		"apikey=\tabcdef",
+		"api key: abcdef",
+		"no keywords here at all, just prose",
+		"",
+	} {
+		f.Add(body)
+	}
+	f.Fuzz(func(t *testing.T, body string) {
+		lower := strings.ToLower(body)
+		if lower != string(bytes.ToLower([]byte(body))) || len(lower) != len(body) {
+			return
+		}
+		want := secretSpec.MatchString(lower) || strings.Contains(body, "BEGIN ") && strings.Contains(body, "PRIVATE KEY")
+		if got := looksLikeSecret(body); got != want {
+			t.Fatalf("looksLikeSecret(%q) = %v, want %v", body, got, want)
 		}
 	})
 }
@@ -186,6 +311,74 @@ var (
 
 const fuzzList = "team"
 
+type sendShape int
+
+const (
+	plainSend sendShape = iota
+	replyToEarlier
+	replyToMalformedID
+	replyWithoutRecipients
+	emptyBody
+	blankBody
+	bodyAtTheLimit
+	bodyOverTheLimit
+	secretBody
+	extraArgument
+	malformedSlug
+	sendShapes
+)
+
+func (shape sendShape) arguments(addressed, earlier string) []string {
+	switch shape {
+	case replyToEarlier:
+		return []string{"--reply-to", earlier, addressed, "fuzz"}
+	case replyToMalformedID:
+		return []string{"--reply-to", "bad id", addressed, "fuzz"}
+	case replyWithoutRecipients:
+		return []string{"--reply-to", earlier}
+	case extraArgument:
+		return []string{addressed, "fuzz", "extra"}
+	case malformedSlug:
+		return []string{addressed, "Bad Slug"}
+	default:
+		return []string{addressed, "fuzz"}
+	}
+}
+
+func (shape sendShape) body(fallback string) string {
+	switch shape {
+	case emptyBody:
+		return ""
+	case blankBody:
+		return "  \n\t\n"
+	case bodyAtTheLimit:
+		return strings.Repeat("a", maxBodyBytes)
+	case bodyOverTheLimit:
+		return strings.Repeat("a", maxBodyBytes+1)
+	case secretBody:
+		return "token: abcdef123"
+	default:
+		return fallback
+	}
+}
+
+func (shape sendShape) refusal() string {
+	return [sendShapes]string{
+		replyToMalformedID:     "--reply-to takes a message id",
+		replyWithoutRecipients: "usage:",
+		emptyBody:              "empty message",
+		blankBody:              "empty message",
+		bodyOverTheLimit:       "over 1048576 bytes",
+		secretBody:             "looks like it carries a secret",
+		extraArgument:          "usage:",
+		malformedSlug:          "a slug is",
+	}[shape]
+}
+
+func (shape sendShape) accepted() bool {
+	return shape == plainSend || shape == replyToEarlier || shape == bodyAtTheLimit
+}
+
 var fuzzDeadline = testStart.Add(3 * time.Hour)
 
 const (
@@ -201,10 +394,12 @@ const (
 	opInbox
 	opCheck
 	opListShow
+	opListShowOne
+	opDoctor
 	opCount
 )
 
-var opNames = [opCount]string{"join", "leave", "send", "send-list", "list-set", "ack", "wait", "list-delete", "who", "inbox", "check", "list-show"}
+var opNames = [opCount]string{"join", "leave", "send", "send-list", "list-set", "ack", "wait", "list-delete", "who", "inbox", "check", "list-show", "list-show-one", "doctor"}
 
 type step struct {
 	op       byte
@@ -215,7 +410,10 @@ type step struct {
 func join(actor, name, role int) step { return step{opJoin, actor, byte(name + len(fuzzNames)*role)} }
 func leave(actor int) step            { return step{opLeave, actor, 0} }
 func send(actor, to int) step         { return step{opSend, actor, byte(to)} }
-func sendList(actor int) step         { return step{opSendList, actor, 0} }
+func sendShaped(actor, to int, shape sendShape) step {
+	return step{opSend, actor, byte(to + len(fuzzNames)*int(shape))}
+}
+func sendList(actor int) step { return step{opSendList, actor, 0} }
 func listSet(names ...int) step {
 	var bits byte
 	for _, n := range names {
@@ -230,6 +428,13 @@ func who(actor int) step    { return step{opWho, actor, 0} }
 func inbox(actor int) step  { return step{opInbox, actor, 0} }
 func check() step           { return step{opCheck, 0, 0} }
 func listShow() step        { return step{opListShow, 0, 0} }
+func listShowOne(named bool) step {
+	if named {
+		return step{opListShowOne, 0, 1}
+	}
+	return step{opListShowOne, 0, 0}
+}
+func doctor(actor int) step { return step{opDoctor, actor, 0} }
 func encode(steps ...step) []byte {
 	encoded := make([]byte, 0, 3*len(steps))
 	for _, s := range steps {
@@ -253,22 +458,30 @@ func (s step) String() string {
 const alpha, beta, gamma = 0, 1, 2
 
 var pinnedSequences = map[string][]step{
-	"mail to a member who left":                  {join(alpha, alpha, 0), join(beta, beta, 0), leave(beta), send(alpha, beta)},
-	"a list naming a member who left":            {join(alpha, alpha, 0), join(beta, beta, 0), join(gamma, gamma, 0), listSet(alpha, beta, gamma), leave(gamma), sendList(alpha)},
-	"an agent rejoins its own fresh name":        {join(alpha, alpha, 1), join(alpha, alpha, 2)},
-	"a fresh name is taken by another agent":     {join(alpha, alpha, 0), join(beta, alpha, 0)},
-	"a stale name is taken over":                 {join(alpha, alpha, 0), wait(31), join(beta, alpha, 0)},
-	"a name just short of stale stays taken":     {join(alpha, alpha, 0), wait(29), join(beta, alpha, 0)},
-	"mail only to oneself":                       {join(alpha, alpha, 0), send(alpha, alpha), listSet(alpha), sendList(alpha)},
-	"a list with a non-member":                   {join(alpha, alpha, 0), listSet(alpha, beta)},
-	"mail to a list that does not exist":         {join(alpha, alpha, 0), join(beta, beta, 0), sendList(alpha)},
-	"a list deleted twice":                       {join(alpha, alpha, 0), listSet(alpha), listDelete(), listDelete()},
-	"ack moves exactly one message":              {join(alpha, alpha, 0), join(beta, beta, 0), send(alpha, beta), send(alpha, beta), ack(beta), ack(beta), ack(beta)},
-	"presence refreshes after five minutes":      {join(alpha, alpha, 0), join(beta, beta, 0), wait(4), send(alpha, beta), wait(2), send(alpha, beta)},
-	"a rejoin keeps unread mail":                 {join(alpha, alpha, 0), join(beta, beta, 0), send(alpha, beta), leave(beta), join(beta, beta, 0), ack(beta)},
-	"commands without membership are refused":    {join(alpha, alpha, 0), send(beta, alpha), leave(beta), ack(beta)},
-	"who with long and non-ASCII roles":          {join(alpha, alpha, 2), join(beta, beta, 3), join(gamma, gamma, 4), who(alpha)},
-	"who with nobody joined":                     {who(alpha)},
+	"mail to a member who left":               {join(alpha, alpha, 0), join(beta, beta, 0), leave(beta), send(alpha, beta)},
+	"a list naming a member who left":         {join(alpha, alpha, 0), join(beta, beta, 0), join(gamma, gamma, 0), listSet(alpha, beta, gamma), leave(gamma), sendList(alpha)},
+	"an agent rejoins its own fresh name":     {join(alpha, alpha, 1), join(alpha, alpha, 2)},
+	"a fresh name is taken by another agent":  {join(alpha, alpha, 0), join(beta, alpha, 0)},
+	"a stale name is taken over":              {join(alpha, alpha, 0), wait(31), join(beta, alpha, 0)},
+	"a name just short of stale stays taken":  {join(alpha, alpha, 0), wait(29), join(beta, alpha, 0)},
+	"mail only to oneself":                    {join(alpha, alpha, 0), send(alpha, alpha), listSet(alpha), sendList(alpha)},
+	"a list with a non-member":                {join(alpha, alpha, 0), listSet(alpha, beta)},
+	"mail to a list that does not exist":      {join(alpha, alpha, 0), join(beta, beta, 0), sendList(alpha)},
+	"a list deleted twice":                    {join(alpha, alpha, 0), listSet(alpha), listDelete(), listDelete()},
+	"ack moves exactly one message":           {join(alpha, alpha, 0), join(beta, beta, 0), send(alpha, beta), send(alpha, beta), ack(beta), ack(beta), ack(beta)},
+	"presence refreshes after five minutes":   {join(alpha, alpha, 0), join(beta, beta, 0), wait(4), send(alpha, beta), wait(2), send(alpha, beta)},
+	"a rejoin keeps unread mail":              {join(alpha, alpha, 0), join(beta, beta, 0), send(alpha, beta), leave(beta), join(beta, beta, 0), ack(beta)},
+	"commands without membership are refused": {join(alpha, alpha, 0), send(beta, alpha), leave(beta), ack(beta)},
+	"who with long and non-ASCII roles":       {join(alpha, alpha, 2), join(beta, beta, 3), join(gamma, gamma, 4), who(alpha)},
+	"who with nobody joined":                  {who(alpha)},
+	"every send shape": {join(alpha, alpha, 0), join(beta, beta, 0), sendShaped(alpha, beta, plainSend), sendShaped(beta, alpha, replyToEarlier), sendShaped(alpha, beta, replyToMalformedID), sendShaped(alpha, beta, replyWithoutRecipients),
+		sendShaped(alpha, beta, emptyBody), sendShaped(alpha, beta, blankBody), sendShaped(alpha, beta, bodyAtTheLimit), sendShaped(alpha, beta, bodyOverTheLimit), sendShaped(alpha, beta, secretBody), sendShaped(alpha, beta, extraArgument), sendShaped(alpha, beta, malformedSlug), who(alpha)},
+	"doctor on a fresh mailbox":                  {doctor(alpha), join(alpha, alpha, 0), doctor(alpha)},
+	"doctor names stale members":                 {join(alpha, alpha, 0), join(beta, beta, 0), wait(29), doctor(gamma), wait(1), doctor(alpha), inbox(alpha), doctor(alpha)},
+	"lists at the deadline":                      {join(alpha, alpha, 0), wait(60), wait(60), wait(60), listShow(), listShowOne(true)},
+	"doctor after the deadline":                  {join(alpha, alpha, 0), wait(60), wait(60), wait(60), doctor(alpha)},
+	"one list shown by name":                     {listShowOne(true), join(alpha, alpha, 0), listSet(alpha), listShowOne(true), listShowOne(false)},
+	"a reply before any mail was sent":           {join(alpha, alpha, 0), join(beta, beta, 0), sendShaped(alpha, beta, replyToEarlier), ack(beta)},
 	"one agent holding two names":                {join(alpha, alpha, 0), join(alpha, beta, 0), send(alpha, beta), leave(alpha), who(gamma)},
 	"mail to a list skips the sender":            {join(alpha, alpha, 0), join(beta, beta, 0), join(gamma, gamma, 0), listSet(alpha, beta, gamma), listShow(), sendList(alpha), who(alpha), ack(beta), who(gamma)},
 	"lists shown before and after delete":        {listShow(), join(alpha, alpha, 0), listSet(alpha), listShow(), listDelete(), listShow()},
@@ -295,6 +508,7 @@ func FuzzMailboxOperations(f *testing.F) {
 }
 
 type mailboxModel struct {
+	lastID  string
 	now     time.Time
 	seen    map[string]time.Time
 	unread  map[string][]string
@@ -323,6 +537,10 @@ func (m *mailboxModel) apply(t *testing.T, base agent, s step) {
 	if s.op == opSend || s.op == opSendList {
 		m.now = m.now.Add(time.Second)
 	}
+	if s.op == opDoctor {
+		m.doctor(t, a, s, &printed)
+		return
+	}
 	if s.op != opWait && !m.now.Before(fuzzDeadline) {
 		m.expectDead(t, a, s)
 		return
@@ -343,8 +561,13 @@ func (m *mailboxModel) apply(t *testing.T, base agent, s step) {
 	case opSend, opSendList:
 		recipients := []string{fuzzNames[int(s.argument)%len(fuzzNames)]}
 		addressed := recipients[0]
+		shape := sendShape(int(s.argument) / len(fuzzNames) % int(sendShapes))
 		if s.op == opSendList {
-			recipients, addressed = m.list, "@"+fuzzList
+			recipients, addressed, shape = m.list, "@"+fuzzList, plainSend
+		}
+		earlier := m.lastID
+		if earlier == "" {
+			earlier = "20300101T000000Z-000000-from-nobody-earlier"
 		}
 		allowed := m.member(actor) && (s.op == opSend || m.hasList)
 		others := 0
@@ -354,17 +577,32 @@ func (m *mailboxModel) apply(t *testing.T, base agent, s step) {
 				others++
 			}
 		}
-		allowed = allowed && others > 0
-		a.stdin = strings.NewReader("body of " + s.String())
-		expectOutcome(t, s, allowed, a.dispatch("send", []string{addressed, "fuzz"}))
+		reachable := allowed && others > 0
+		allowed = reachable && shape.accepted()
+		a.stdin = strings.NewReader(shape.body("body of " + s.String()))
+		err := a.dispatch("send", shape.arguments(addressed, earlier))
+		expectOutcome(t, s, allowed, err)
+		if reachable && !shape.accepted() && !strings.Contains(err.Error(), shape.refusal()) {
+			t.Fatalf("%s: refused with %v, want %q", s, err, shape.refusal())
+		}
 		if !allowed {
 			return
 		}
 		lines := strings.Split(strings.TrimRight(printed.String(), "\n"), "\n")
 		id := strings.Fields(strings.TrimPrefix(lines[len(lines)-1], "sent "))[0]
+		m.lastID = id
 		for _, r := range recipients {
-			if r != actor {
-				m.unread[r] = append(m.unread[r], id+".md")
+			if r == actor {
+				continue
+			}
+			m.unread[r] = append(m.unread[r], id+".md")
+			header, err := readMessageHeader(filepath.Join(base.box.inbox(r), id+".md"))
+			wantReply := ""
+			if shape == replyToEarlier {
+				wantReply = earlier
+			}
+			if err != nil || header["from"] != actor || header["in-reply-to"] != wantReply {
+				t.Fatalf("%s: %s received header %v (%v), want from %s, in-reply-to %q", s, r, header, err, actor, wantReply)
 			}
 		}
 		m.touch(actor)
@@ -408,6 +646,21 @@ func (m *mailboxModel) apply(t *testing.T, base agent, s step) {
 		if m.member(actor) {
 			m.touch(actor)
 		}
+	case opListShowOne:
+		name := "other"
+		if s.argument%2 == 1 {
+			name = fuzzList
+		}
+		expectOutcome(t, s, true, a.dispatch("list", []string{"show", name}))
+		want := ""
+		if m.hasList && name == fuzzList {
+			want = "@" + fuzzList + ": " + strings.Join(m.list, " ") + "\n"
+		}
+		if printed.String() != want {
+			t.Fatalf("%s: printed %q, want %q", s, printed.String(), want)
+		}
+		expectOutcome(t, s, false, a.dispatch("list", []string{"show", name, "extra"}))
+		expectOutcome(t, s, false, a.dispatch("list", []string{"show", "Bad Name"}))
 	case opListShow:
 		expectOutcome(t, s, true, a.dispatch("list", nil))
 		want := ""
@@ -428,14 +681,57 @@ func (m *mailboxModel) apply(t *testing.T, base agent, s step) {
 	}
 }
 
+func (m *mailboxModel) doctor(t *testing.T, a agent, s step, printed *bytes.Buffer) {
+	t.Helper()
+	err := a.dispatch("doctor", nil)
+	out := printed.String()
+	stale := make([]string, 0, len(fuzzNames))
+	for _, name := range fuzzNames {
+		if seen, member := m.seen[name]; member && m.now.Sub(seen) >= a.cfg.staleAfter {
+			stale = append(stale, name)
+		}
+	}
+	expect := func(present bool, text string) {
+		t.Helper()
+		if strings.Contains(out, text) != present {
+			t.Fatalf("%s: doctor printed\n%s\nwant %q present=%v", s, out, text, present)
+		}
+	}
+	if len(stale) > 0 {
+		expect(true, "not seen for 30+ min: "+strings.Join(stale, " ")+"\n")
+	} else {
+		expect(false, "not seen for")
+	}
+	member := m.member(fuzzNames[s.actor])
+	passed := !m.now.Before(fuzzDeadline)
+	expect(member, "this agent is member '"+fuzzNames[s.actor]+"'")
+	expect(passed, "has passed; the mailbox is closed")
+	expect(true, "no sync check and no Syncthing")
+	problems := 0
+	for _, p := range []bool{!member, passed} {
+		if p {
+			problems++
+		}
+	}
+	if problems == 0 {
+		if err != nil {
+			t.Fatalf("%s: doctor returned %v, want no problems", s, err)
+		}
+		return
+	}
+	if err == nil || !strings.Contains(err.Error(), "doctor: "+strconv.Itoa(problems)+" problems") {
+		t.Fatalf("%s: doctor returned %v, want %d problems", s, err, problems)
+	}
+}
+
 func (m *mailboxModel) expectDead(t *testing.T, a agent, s step) {
 	t.Helper()
 	a.stdin = strings.NewReader("body")
 	arguments := map[byte][]string{
 		opJoin: {"gamma"}, opSend: {"beta", "late"}, opSendList: {"@" + fuzzList, "late"}, opListSet: {"set", fuzzList, "alpha"},
-		opAck: {"20300101T000000Z-000000-from-nobody-none.md"}, opListDelete: {"delete", fuzzList},
+		opAck: {"20300101T000000Z-000000-from-nobody-none.md"}, opListDelete: {"delete", fuzzList}, opListShowOne: {"show", fuzzList},
 	}
-	commands := [opCount]string{opJoin: "join", opLeave: "leave", opSend: "send", opSendList: "send", opListSet: "list", opAck: "ack", opListDelete: "list", opWho: "who", opInbox: "inbox", opCheck: "check", opListShow: "list"}
+	commands := [opCount]string{opJoin: "join", opLeave: "leave", opSend: "send", opSendList: "send", opListSet: "list", opAck: "ack", opListDelete: "list", opWho: "who", opInbox: "inbox", opCheck: "check", opListShow: "list", opListShowOne: "list"}
 	err := a.dispatch(commands[s.op], arguments[s.op])
 	if _, dead := err.(deadError); !dead {
 		t.Fatalf("%s at the deadline returned %v, want a deadError", s, err)

@@ -120,7 +120,7 @@ never the user's approval and never carries secrets.
 | `inbox` · `ack <file>` | read mail; `ack` moves it to `read/`, which the sender sees |
 | `watch` | prints `NEW MAIL:` lines until the mailbox dies |
 | `doctor` | 🩺 what is missing and exactly how to fix it, changing nothing |
-| `sync id` · `sync status` · `sync share <device-id> [--address tcp://ip:22000] [--yes]` | 🔄 Syncthing for this mailbox |
+| `sync id` · `sync status` · `sync share <device-id> [--address tcp://ip:22000\|dynamic] [--yes]` | 🔄 Syncthing for this mailbox: each peer's link, and sharing |
 | `config` | resolved settings and every key |
 
 Exit codes: `0` ok · `1` refused or usage · `2` the mailbox is dead.
@@ -138,7 +138,7 @@ agent-mail sync share <their-id> --address tcp://192.168.1.20:22000          # �
 agent-mail sync share <their-id> --address tcp://192.168.1.20:22000 --yes    # ✅ applies it
 ```
 
-`sync share` adds the peer, adds the `agent-mail` folder, shares it, and writes `*.tmp` into `.stignore`, skipping whatever is already done. Set `AGENT_MAIL_SYNC_CHECK=syncthing` and the mailbox reports `DEAD:` whenever Syncthing stops sharing it.
+`sync share` adds the peer, adds the `agent-mail` folder, shares it, and writes `*.tmp` into `.stignore`, skipping whatever is already done. Run it again with a different `--address` to replace the peer's address. `sync status` shows each peer's link (`connected via relay …`, `connected directly …` or `not connected`), its addresses, and this device's listeners, discovery and relays. Set `AGENT_MAIL_SYNC_CHECK=syncthing` and the mailbox reports `DEAD:` whenever Syncthing stops sharing it.
 
 > [!IMPORTANT]
 > agent-mail **never** installs software, starts services or opens firewall ports. `doctor` prints the exact commands, including a `systemd-run` line that stops Syncthing at the mailbox deadline, and you run them.
@@ -164,7 +164,7 @@ The firewall on the reachable machine must let the container's traffic in. That 
 
 **Across the internet, keep the LAN setup on a private network.** Put both machines on a WireGuard or Tailscale network, share with the peer's address there, and accept port 22000 only on that interface (`sudo ufw allow in on tailscale0 to any port 22000 proto tcp`). Nothing is opened to the internet, and relays and global discovery stay off. A container that cannot create a network interface can run `tailscaled --tun=userspace-networking` and reach the peer through its SOCKS5 proxy (`all_proxy=socks5://localhost:1055`), or the folder can sync on the container's host and be mounted in.
 
-**Or use Syncthing's own internet mode.** Share with `--address dynamic` on both sides and turn on global discovery, relays and NAT traversal. Traffic stays encrypted between the two device IDs, but the public discovery and relay servers see both IP addresses, relayed traffic is slower, and `doctor` warns that traffic can leave the LAN. Self-hosted `stdiscosrv` and `strelaysrv` keep that metadata with you.
+**Or use Syncthing's own internet mode.** Share with `--address dynamic` on both sides and turn on global discovery, relays and NAT traversal. Each side must also listen on a relay: a LAN-only setup listens on `tcp://0.0.0.0:22000` alone, and `doctor` flags that with the fix, `syncthing cli config options raw-listen-addresses 0 set default`. Traffic stays encrypted between the two device IDs, but the public discovery and relay servers see both IP addresses, relayed traffic is slower, and `doctor` warns that traffic can leave the LAN. A relay of your own keeps that metadata with you: run `strelaysrv -pools ""`, have each device listen on the relay URI it prints, and share with `--address relay://<host>:22067/?id=<relay-id>`, leaving global discovery off.
 
 | Tool | Over the internet |
 |---|---|
@@ -203,14 +203,15 @@ Settings live in `config` (`KEY=value`) in the platform config directory: `~/.co
 
 ```sh
 go build -trimpath -o agent-mail . && bash tests/agent-mail.test.sh   # behaviour tests, from the outside
-go test -bench . ./...                                                  # unit tests, pinned fuzz cases + allocations per watch poll
-FUZZTIME=1m bash tests/fuzz.sh                                          # fuzz every target, including the stateful mailbox model
-MIN_EFFICACY=90 bash tests/mutation.sh                                  # mutation testing with gremlins, run from its pinned version
+go test -bench . ./...                                                  # pinned fuzz cases + allocations per watch poll
+FUZZTIME=1m bash tests/fuzz.sh                                          # fuzz every target, including the stateful models
+MIN_EFFICACY=93 bash tests/mutation.sh                                  # mutation testing with gremlins, run from its pinned version
+SYNCTHING=… STRELAYSRV=… bash tests/syncthing-e2e.sh                    # two real Syncthing devices through a private relay
 ```
 
-The stateful fuzz target drives random sequences of join, leave, send, list, ack, who and waiting against a model of the mailbox, and checks the files after every step. Each bug it should never miss again is pinned by name in `pinnedSequences`. Neither script writes anything git tracks.
+Tests are stateful fuzz targets, each checked against a model after every step: the mailbox (join, leave, every shape of send, lists, ack, inbox, who, check, doctor and waiting), Syncthing sharing (`sync share`, `sync status` and `doctor` against an in-process fake Syncthing, with options, listeners, links and check modes changing underneath) and `watch` (arrivals, acks, rescans, presence, the deadline, a lost inbox). Every edge case is a named sequence in `pinnedSequences`, `pinnedSyncSequences` or `pinnedWatchSequences`; the validators, secret detection and the JSON reader are fuzzed against independent specifications. Nothing the fuzzers or gremlins write is tracked by git.
 
-CI runs the tests and the pinned fuzz cases on Linux, macOS and Windows, fuzzes each target for 30 seconds, and fails when mutation efficacy drops below 90%. Every night each fuzz target runs for 55 minutes in parallel, building on the corpus of earlier nights from the Actions cache. Changes go under `[Unreleased]` in [CHANGELOG.md](CHANGELOG.md); a release renames that section to its version. A `v*` tag fails without its section, and its section becomes the release notes. The tag builds six reproducible binaries with a pinned Go version, writes `SHA256SUMS`, attests their provenance and publishes the release.
+CI runs the tests and the pinned fuzz cases on Linux, macOS and Windows, fuzzes each target for 30 seconds, fails when mutation efficacy drops below 93%, and runs two real Syncthing devices through a private relay with every public Syncthing server turned off. Every night each fuzz target runs for 55 minutes in parallel, building on the corpus of earlier nights from the Actions cache. Changes go under `[Unreleased]` in [CHANGELOG.md](CHANGELOG.md); a release renames that section to its version. A `v*` tag fails without its section, and its section becomes the release notes. The tag builds six reproducible binaries with a pinned Go version, writes `SHA256SUMS`, attests their provenance and publishes the release.
 
 ## 📜 License
 

@@ -15,7 +15,7 @@ A line starting `DEAD:` with exit 2 means the mailbox is closed: the deadline pa
 
 ## Setting up
 
-`agent-mail doctor` lists what is missing and the exact commands to fix it; it changes nothing. Installing software, starting services and firewall changes are the user's steps: show them doctor's commands. With Syncthing, `agent-mail sync share <device-id>` prints a plan for sharing the mailbox, and applies it only with `--yes` after the user agrees.
+`agent-mail doctor` lists what is missing and the exact commands to fix it; it changes nothing. Installing software, starting services and firewall changes are the user's steps: show them doctor's commands. With Syncthing, `agent-mail sync share <device-id>` prints a plan for sharing the mailbox, and applies it only with `--yes` after the user agrees. `agent-mail sync status` shows whether each peer is connected, and how.
 
 ## Identity
 

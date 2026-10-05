@@ -29,21 +29,22 @@ const usage = `usage: agent-mail <command>
   ack <file>                               mark a message read
   watch                                    print NEW MAIL lines until the mailbox dies
   doctor                                   what is missing, and how to fix it (changes nothing)
-  sync id | status                         this device's Syncthing ID; how the mailbox is shared
-  sync share <device-id> [--address tcp://ip:22000|dynamic] [--name n] [--yes]`
+  sync id | status                         this device's Syncthing ID; how the mailbox is shared, and each peer's link
+  sync share <device-id> [--address tcp://ip:22000|relay://ip:22067/?id=<relay-id>|dynamic] [--name n] [--yes]`
 
 type deadError struct{ reason string }
 
 func (e deadError) Error() string { return "DEAD: " + e.reason }
 
 type agent struct {
-	cfg   config
-	box   mailbox
-	now   func() time.Time
-	host  string
-	stdin io.Reader
-	out   *output
-	quiet *output
+	cfg     config
+	box     mailbox
+	now     func() time.Time
+	host    string
+	stdin   io.Reader
+	out     *output
+	quiet   *output
+	execute programRunner
 }
 
 func main() {
@@ -63,13 +64,14 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	host, _ := os.Hostname()
 	a := agent{
-		cfg:   cfg,
-		box:   mailbox{dir: cfg.dir},
-		now:   time.Now,
-		host:  host,
-		stdin: stdin,
-		out:   newOutput(stdout),
-		quiet: newOutput(io.Discard),
+		cfg:     cfg,
+		box:     mailbox{dir: cfg.dir},
+		now:     time.Now,
+		host:    host,
+		stdin:   stdin,
+		out:     newOutput(stdout),
+		quiet:   newOutput(io.Discard),
+		execute: runProgram,
 	}
 	err = a.dispatch(args[0], args[1:])
 	if err == nil {

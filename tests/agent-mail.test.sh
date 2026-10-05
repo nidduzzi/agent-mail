@@ -246,6 +246,19 @@ test_syncthing_sharing() {
   expect "share --yes applies every step" 0 "done: add '\*.tmp'" with_syncthing as alpha sync share "$peer_device" --address tcp://192.0.2.7:22000 --yes
   expect "share is idempotent" 0 "nothing to do" with_syncthing as alpha sync share "$peer_device" --yes
   expect "status shows the peer" 0 "shared with: $peer_device" with_syncthing as alpha sync status
+  expect "status names the peer, its link and its addresses" 0 "(agent-mail-[a-z0-9]*), not connected; addresses: tcp://192.0.2.7:22000" with_syncthing as alpha sync status
+  expect "doctor warns while no peer is connected" 0 "no peer is connected yet" with_syncthing as alpha doctor
+  expect "share without --address keeps the peer's address" 0 "nothing to do.*at tcp://192.0.2.7:22000" with_syncthing as alpha sync share "$peer_device"
+  expect "share plans to replace a changed address" 0 "will replace the addresses of $peer_device (tcp://192.0.2.7:22000) with dynamic" with_syncthing as alpha sync share "$peer_device" --address dynamic
+  expect "share replaces the address with --yes" 0 "done: replace the addresses" with_syncthing as alpha sync share "$peer_device" --address dynamic --yes
+  expect "status shows the replaced address" 0 "addresses: dynamic$" with_syncthing as alpha sync status
+  expect "doctor warns when a dynamic peer cannot be found" 0 "has only a dynamic address and discovery is off" with_syncthing as alpha doctor
+  printf '{\n  "connections": {\n    "%s": {\n      "address": "198.51.100.4:22067",\n      "connected": true,\n      "primary": {"type": "relay-server", "address": "198.51.100.4:22067"},\n      "type": "relay-server"\n    }\n  },\n  "total": {}\n}\n' "$peer_device" > "$syncthing_state/connections"
+  expect "status shows a relayed link" 0 "connected via relay 198.51.100.4:22067" with_syncthing as alpha sync status
+  expect "doctor reports a connected peer" 0 "ok       peer $peer_device connected via relay" with_syncthing as alpha doctor
+  printf '{"connections": {"%s": {"connected": tru' "$peer_device" > "$syncthing_state/connections"
+  expect "status survives an unreadable connection report" 0 "connection unknown" with_syncthing as alpha sync status
+  rm "$syncthing_state/connections"
   expect "the built-in sync check passes once shared" 0 "time left\|DEADLINE: none" env AGENT_MAIL_SYNC_CHECK=syncthing AGENT_MAIL_SYNCTHING="$fake_syncthing" FAKE_SYNCTHING_STATE="$syncthing_state" AGENT_MAIL_CONFIG=/dev/null AGENT_MAIL_DIR="$mailbox" AGENT_MAIL_SELF=alpha "$agent_mail" check
   touch "$syncthing_state/stopped"
   expect "the built-in sync check fails when Syncthing stops" 2 "DEAD: the sync check failed: Syncthing is not running" env AGENT_MAIL_SYNC_CHECK=syncthing AGENT_MAIL_SYNCTHING="$fake_syncthing" FAKE_SYNCTHING_STATE="$syncthing_state" AGENT_MAIL_CONFIG=/dev/null AGENT_MAIL_DIR="$mailbox" AGENT_MAIL_SELF=alpha "$agent_mail" check
@@ -256,6 +269,10 @@ test_syncthing_sharing() {
   expect "share refuses a malformed address" 1 "--address is" with_syncthing as alpha sync share "$peer_device" --address "192.0.2.7; rm -rf /"
   echo true > "$syncthing_state/option-relays-enabled"
   expect "doctor warns when traffic can leave the LAN" 0 "may reach beyond the LAN: relays" with_syncthing as alpha doctor
+  printf 'tcp://0.0.0.0:22000\n' > "$syncthing_state/listen"
+  expect "doctor flags relays without a relay listener" 1 "relays are on, but Syncthing listens on no relay" with_syncthing as alpha doctor
+  expect "doctor gives the listener fix" 1 "raw-listen-addresses 0 set default" with_syncthing as alpha doctor
+  rm "$syncthing_state/listen"
   expect "doctor inspects Syncthing behind a custom sync check" 0 "may reach beyond the LAN: relays" with_syncthing env AGENT_MAIL_SYNC_CHECK=true AGENT_MAIL_CONFIG=/dev/null AGENT_MAIL_DIR="$mailbox" AGENT_MAIL_SELF=alpha "$agent_mail" doctor
   touch "$syncthing_state/stopped"
   expect_absent "doctor leaves a stopped Syncthing alone behind a custom sync check" "start it" with_syncthing env AGENT_MAIL_SYNC_CHECK=true AGENT_MAIL_CONFIG=/dev/null AGENT_MAIL_DIR="$mailbox" AGENT_MAIL_SELF=alpha "$agent_mail" doctor

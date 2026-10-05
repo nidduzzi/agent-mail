@@ -50,6 +50,9 @@ func newWatcher(a agent, now time.Time) (*watcher, error) {
 		nextPresence: now,
 	}
 	existing, err := messagesIn(w.inbox)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, deadError{"the inbox " + w.inbox + " is gone"}
+	}
 	if err != nil {
 		return nil, err
 	}

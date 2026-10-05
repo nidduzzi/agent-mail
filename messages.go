@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 const maxBodyBytes = 1 << 20
@@ -115,11 +116,10 @@ func looksLikeSecret(body string) bool {
 			afterKeyword := strings.TrimLeft(lower[searchFrom+at+len(keyword):], " \t\r\n")
 			if afterKeyword != "" && (afterKeyword[0] == '=' || afterKeyword[0] == ':') {
 				value := strings.TrimLeft(afterKeyword[1:], " \t\r\n")
-				length := 0
-				for length < len(value) && !strings.ContainsRune(" \t\r\n<", rune(value[length])) {
-					length++
+				if end := strings.IndexAny(value, " \t\r\n<"); end >= 0 {
+					value = value[:end]
 				}
-				if length >= 6 {
+				if utf8.RuneCountInString(value) >= 6 {
 					return true
 				}
 			}
